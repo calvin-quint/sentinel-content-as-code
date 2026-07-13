@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/identity/successful_signin_from_non_compliant_device.kql
+id: 1cbf340b-493f-45cc-8ee0-746983ec4e40
+name: Successful Sign-in from Non-Compliant Device
+description: Successful Sign-in from Non-Compliant Device
+severity: Medium
+status: Available
+enabled: true
+queryFile: successful-signin-from-non-compliant-device.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- InitialAccess
+relevantTechniques:
+- T1078.004
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: Name
+    columnName: Account_0_Name
+  - identifier: UPNSuffix
+    columnName: Account_0_UPNSuffix
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: IPAddress

@@ -1,0 +1,47 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/admin-by-request/suspicious_or_weak_elevation_justification.kql
+// Admin By Request — Suspicious or Weak Elevation Justification
+// MITRE ATT&CK: Privilege Escalation — Abuse Elevation Control Mechanism (T1548)
+// Detects: Self-service admin elevation requests approved on a vague, boilerplate,
+//          or policy-bypass-flavored justification ("test", "need admin", "bypass",
+//          "disable"), after excluding known-legitimate recurring reasons (IDE/
+//          docker/collab-tool installs and updates). Also flags short sessions
+//          justified only by generic text when paired with risk signals: install
+//          source in Downloads/Temp, LOLBins in the elevated app list (sc.exe,
+//          reg.exe, wscript.exe), or elevation windows of 4+ hours.
+// Entity mapping: Account → UPN → user_email_s
+//                 Host    → Name → computer_name_s
+AdminByRequestLogs_CL
+| where isnotempty(reason_s)
+| extend ReasonLower = tolower(trim(" ", reason_s))
+| extend SessionHours = iif(
+    isnotempty(startTimeUTC_t) and isnotempty(endTimeUTC_t) and tostring(endTimeUTC_t) !has "Invalid",
+    datetime_diff('hour', endTimeUTC_t, startTimeUTC_t),
+    long(0))
+// ── Exclude known legitimate justifications ───────────────────────────────────
+| where not(ReasonLower has_any (
+    "fix docker", "docker",
+    "vs code", "vscode", "visual studio code",
+    "ssms", "sql server management",
+    "azure cli", "azure data studio",
+    "android studio",
+    "zoom", "teams", "slack",
+    "splashtop",
+    "notepad++",
+    "ultimaker", "cura",
+    "plugin for", "extension for",
+    "update ssms", "update vs", "update sql",
+    "install ssms", "install vs", "install sql",
+    "upgrading", "patching"
+))
+// ── Flag suspicious justifications ───────────────────────────────────────────
+| where ReasonLower in ("test","testing","n/a","na","none","yes","no","ok","okay","sure","work","admin","access","need","required","yep",".","..","...","just because","because","needed","admin session")
+    or ReasonLower has_any ("need access","need admin","need it","need this","require access","for work","for my work","to do my job","to do work","work stuff","work related","just testing","just a test","testing abr","no reason","not sure","dont know","routine","routine update","routine maintenance","standard","standard maintenance","standard update","update","install","installation","upgrade","installing a thing","install a thing","need to install","need to update","need to run","have to","must have","should have","install plugin","installing plugin")
+    or ReasonLower has_any ("abr","admin by request","adminbyrequest","elevation","elevated","admin rights","admin access","local admin","need admin rights","admin session")
+    or ReasonLower has_any ("bypass","workaround","override","disable","turn off","remove policy","remove restriction","get around","avoid","skip","ignore policy")
+    or strlen(ReasonLower) <= 10
+    or (application_path_s has_any ("\\Downloads\\","\\AppData\\Local\\Temp\\","/Users/","/Downloads") and strlen(ReasonLower) <= 25)
+    or (elevatedApplications_s has_any ("silent_install","sc.exe","net.exe","net1.exe","reg.exe","wscript.exe","cscript.exe","mshta.exe") and strlen(ReasonLower) <= 30)
+    or (SessionHours >= 4 and strlen(ReasonLower) <= 25)
+| project TimeGenerated, reason_s, user_email_s, computer_name_s, application_name_s, application_path_s, elevatedApplications_s, SessionHours, auditlogLink_s
+| sort by TimeGenerated desc

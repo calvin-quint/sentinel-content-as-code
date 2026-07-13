@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/teams/activity_from_amazon_isp_on_linux_clients.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 0767db84-336e-4872-a470-a111cbd22315
+name: Teams Activity from Amazon ISP on Linux Clients
+description: Any Microsoft Teams activity originating from an AWS-hosted IP (ISP contains "Amazon") on
+  a Linux client — the network/OS fingerprint of a cloud-hosted meeting bot rather than a genuine employee
+  endpoint. Broadest of the Teams-bot family of rules; feeds the more targeted non-user-actor and AI-transcription
+  variants in this folder.
+severity: Medium
+status: Available
+enabled: true
+queryFile: activity-from-amazon-isp-on-linux-clients.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Collection
+relevantTechniques:
+- T1119
+entityMappings:
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: ISP-derived source IP (RawEventData)

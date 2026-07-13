@@ -1,0 +1,48 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/aitm-and-token-theft/versions/aitm-token-replay-detection/v1.kql
+// v1 — earliest AiTM Token Replay Detection iteration (see ../README.md for
+// lineage). MITRE ATT&CK: Steal Web Session Cookie (T1539). Correlates a
+// token issued via SigninLogs against its later use in MicrosoftGraphActivityLogs
+// from a different IP within 24h. Superseded by the SignalScore-weighted
+// current version at ../../AiTM Token Replay Detection.kql.
+let issuedTokens = SigninLogs
+| where TimeGenerated > ago(1d)
+| where isnotempty(UniqueTokenIdentifier)
+| where ResultType == 0
+| project UniqueTokenIdentifier, IssuedIP = IPAddress,
+    IssuedCountry = tostring(LocationDetails.countryOrRegion),
+    IssuedTime = TimeGenerated, UserPrincipalName,
+    IssuedApp = AppDisplayName,
+    IssuedDevice = tostring(DeviceDetail.displayName),
+    IssuedDeviceTrust = tostring(DeviceDetail.trustType);
+MicrosoftGraphActivityLogs
+| where TimeGenerated > ago(1d)
+| where isnotempty(UniqueTokenId)
+| project GraphTime = TimeGenerated, GraphIP = IPAddress,
+    RequestUri, UserAgent, UserId, 
+    UniqueTokenIdentifier = UniqueTokenId,
+    GraphRequestMethod = RequestMethod,
+    GraphResponseCode = ResponseStatusCode,
+    GraphScopes = Scopes
+| join kind=inner issuedTokens on UniqueTokenIdentifier
+| where GraphIP != IssuedIP
+| extend TimeDelta = GraphTime - IssuedTime
+| where TimeDelta between (0min .. 24h)
+| project
+    GraphTime,
+    IssuedTime,
+    TimeDelta,
+    UserPrincipalName,
+    UniqueTokenIdentifier,
+    IssuedIP,
+    IssuedCountry,
+    IssuedApp,
+    IssuedDevice,
+    IssuedDeviceTrust,
+    GraphIP,
+    RequestUri,
+    GraphRequestMethod,
+    GraphResponseCode,
+    GraphScopes,
+    UserAgent
+| order by GraphTime desc

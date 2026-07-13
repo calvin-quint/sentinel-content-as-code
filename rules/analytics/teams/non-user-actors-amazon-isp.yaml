@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/teams/non_user_actors_amazon_isp.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: fa27e96d-4090-4627-9f8f-974539de7f5b
+name: Non-User Actor in Teams from Amazon ISP
+description: Teams activity where the acting entity's Role is "Actor" but its Type is not "User" (a bot/application
+  identity, not a person), sourced from AWS infrastructure. Narrows the ISP-wide rule down to confirmed
+  non-human actors — the strongest signal that an automated bot (rather than an employee on a cloud VPN)
+  is operating inside a meeting.
+severity: Medium
+status: Available
+enabled: true
+queryFile: non-user-actors-amazon-isp.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Collection
+relevantTechniques:
+- T1119

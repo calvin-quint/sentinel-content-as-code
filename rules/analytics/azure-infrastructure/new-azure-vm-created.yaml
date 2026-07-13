@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/azure-infrastructure/new_azure_vm_created.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 57a718e9-bd1e-4205-97d3-5facea60b2a9
+name: New Azure VM Created
+description: First-seen creation of a new Azure virtual machine, keyed by VM name + caller. A compromised
+  account or malicious insider can spin up a VM for crypto-mining, C2 relay, or a staging box outside
+  normal change-management — new/unexpected callers or resource groups are the signal to chase.
+severity: Medium
+status: Available
+enabled: true
+queryFile: new-azure-vm-created.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- DefenseEvasion
+- Persistence
+relevantTechniques:
+- T1578.002
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: Name
+    columnName: AccountName
+  - identifier: UPNSuffix
+    columnName: AccountUPNSuffix
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: CallerIpAddress

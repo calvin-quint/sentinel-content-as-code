@@ -1,0 +1,93 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/aitm-and-token-theft/Token%20Theft%20and%20Replay%20Detection.kql
+// Token Theft and Replay Detection (production/current version)
+// MITRE ATT&CK: Credential Access — Steal Web Session Cookie (T1539);
+//               Defense Evasion / Persistence — Use Alternate Authentication
+//               Material: Web Session Cookie (T1550.004)
+// Detects: High-risk sign-ins where the MFA requirement was satisfied by a
+//          previously-issued token claim (not a fresh MFA prompt) rather
+//          than by no incoming token, self-joined against the same user's
+//          immediately prior sign-in to compute impossible country/state/
+//          city travel between the two. Broadens the trigger from a strict
+//          AND to an OR across three paths (claim-satisfied, previously-
+//          satisfied, or approved mobile push) so it catches variants the
+//          earlier archived versions missed — see versions/ for lineage.
+// Entity mapping: Account → UPN     → UserPrincipalName
+//                 IP      → Address → IPAddress
+SigninLogs
+| where ResultType in (0, 50125, 50140, 70043, 70044)
+  and Status.errorCode == 0
+  and RiskLevelDuringSignIn == "high"
+  and (IncomingTokenType == "none" or isnull(IncomingTokenType))
+  and ConditionalAccessStatus == "success"
+  and (
+        AuthenticationDetails has "MFA requirement satisfied by claim in the token"
+     or AuthenticationDetails has "Previously satisfied"
+     or (AuthenticationDetails has "Mobile app notification" and AuthenticationDetails has '"succeeded":true')
+  )
+| extend 
+    Country = tostring(LocationDetails["countryOrRegion"]),
+    State = tostring(LocationDetails["state"]),
+    City = tostring(LocationDetails["city"]),
+    AuthRequirement = tostring(parse_json(AuthenticationDetails)[0].authenticationStepRequirement),
+    AuthMethod = tostring(parse_json(AuthenticationDetails)[0].authenticationMethod),
+    AuthDetail = tostring(parse_json(AuthenticationDetails)[0].authenticationStepResultDetail),
+    SignInOutcome = case(
+        ResultType == 0, "Success",
+        ResultType in (50125, 50140), "Partial MFA",
+        ResultType == 70044, "Token Replay",
+        ResultType == 70043, "Expired/Invalid Token",
+        "Other"
+    )
+| join kind=inner (
+    SigninLogs
+    | where ResultType in (0, 50125, 50140, 70043, 70044)
+      and Status.errorCode == 0
+      and RiskLevelDuringSignIn == "high"
+      and (IncomingTokenType == "none" or isnull(IncomingTokenType))
+      and ConditionalAccessStatus == "success"
+      and (
+            AuthenticationDetails has "MFA requirement satisfied by claim in the token"
+         or AuthenticationDetails has "Previously satisfied"
+         or (AuthenticationDetails has "Mobile app notification" and AuthenticationDetails has '"succeeded":true')
+      )
+    | extend 
+        PreviousTime = TimeGenerated,
+        PreviousCountry = tostring(LocationDetails["countryOrRegion"]),
+        PreviousState = tostring(LocationDetails["state"]),
+        PreviousCity = tostring(LocationDetails["city"])
+    | project UserPrincipalName, PreviousTime, PreviousCountry, PreviousState, PreviousCity
+) on UserPrincipalName
+| where PreviousTime < TimeGenerated
+| summarize arg_min(TimeGenerated, *) by UserPrincipalName, TimeGenerated
+| extend 
+    ImpossibleCountryTravel = iff(Country != PreviousCountry and isnotempty(PreviousCountry), true, false),
+    ImpossibleStateTravel   = iff(State   != PreviousState   and isnotempty(PreviousState), true, false),
+    ImpossibleCityTravel    = iff(City    != PreviousCity    and isnotempty(PreviousCity), true, false)
+| project 
+    TimeGenerated,
+    UserPrincipalName,
+    IPAddress,
+    Country,
+    State,
+    City,
+    PreviousCountry,
+    PreviousState,
+    PreviousCity,
+    ImpossibleCountryTravel,
+    ImpossibleStateTravel,
+    ImpossibleCityTravel,
+    ResultType,
+    SignInOutcome,
+    AppDisplayName,
+    ResourceDisplayName,
+    RiskLevelDuringSignIn,
+    IncomingTokenType,
+    AuthRequirement,
+    AuthMethod,
+    AuthDetail,
+    ClientAppUsed,
+    DeviceDetail,
+    CorrelationId,
+    OriginalRequestId
+| order by TimeGenerated desc

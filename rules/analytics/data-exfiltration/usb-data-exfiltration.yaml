@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/data-exfiltration/usb_data_exfiltration.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 17728a44-4783-4ac4-8667-43938e16c7fa
+name: USB Mass Storage Bulk File Copy
+description: A USB mass-storage device connecting, followed within a configurable window (default 15 min)
+  by a bulk file copy from the endpoint exceeding a file-count threshold (default 50). Optional DeviceNameToSearch
+  filter to scope to a specific host during a targeted investigation.
+severity: Medium
+status: Available
+enabled: true
+queryFile: usb-data-exfiltration.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Exfiltration
+relevantTechniques:
+- T1052.001
+entityMappings:
+- entityType: Host
+  fieldMappings:
+  - identifier: Name
+    columnName: DeviceName

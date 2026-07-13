@@ -1,0 +1,84 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/aitm-and-token-theft/versions/token-theft-and-replay-detection/v3.kql
+// v3 — adds a self-join for impossible country/state/city travel and
+// broadens ResultType to catch partial-MFA/replay/expired-token outcomes
+// (see ../README.md for lineage). MITRE ATT&CK: Use Alternate Authentication
+// Material: Web Session Cookie (T1550.004). Still AND-gated on all
+// conditions — the final version widens this to an OR. Superseded by
+// ../../Token Theft and Replay Detection.kql.
+SigninLogs
+| where ResultType in (0, 50125, 50140, 70043, 70044)
+    and Status.errorCode == 0
+    and RiskLevelDuringSignIn == "high"
+    and AuthenticationDetails has "MFA requirement satisfied by claim in the token"
+    and AuthenticationDetails has "Previously satisfied"
+    and (IncomingTokenType == "none" or isnull(IncomingTokenType))
+    and ConditionalAccessStatus == "success"
+| extend 
+    Country = tostring(LocationDetails["countryOrRegion"]),
+    State = tostring(LocationDetails["state"]),
+    City = tostring(LocationDetails["city"]),
+    AuthRequirement = tostring(parse_json(AuthenticationDetails)[0].authenticationStepRequirement),
+    AuthMethod = tostring(parse_json(AuthenticationDetails)[0].authenticationMethod),
+    AuthDetail = tostring(parse_json(AuthenticationDetails)[0].authenticationStepResultDetail),
+    SignInOutcome = case(
+        ResultType == 0, "Success",
+        ResultType in (50125, 50140), "Partial MFA",
+        ResultType == 70044, "Token Replay",
+        ResultType == 70043, "Expired/Invalid Token",
+        "Other"
+    )
+| join kind=inner (
+    SigninLogs
+    | where ResultType in (0, 50125, 50140, 70043, 70044)
+        and Status.errorCode == 0
+        and RiskLevelDuringSignIn == "high"
+        and AuthenticationDetails has "MFA requirement satisfied by claim in the token"
+        and AuthenticationDetails has "Previously satisfied"
+        and (IncomingTokenType == "none" or isnull(IncomingTokenType))
+        and ConditionalAccessStatus == "success"
+    | extend 
+        PreviousTime = TimeGenerated,
+        PreviousCountry = tostring(LocationDetails["countryOrRegion"]),
+        PreviousState = tostring(LocationDetails["state"]),
+        PreviousCity = tostring(LocationDetails["city"])
+    | project 
+        UserPrincipalName, 
+        PreviousTime, 
+        PreviousCountry,
+        PreviousState,
+        PreviousCity
+) on UserPrincipalName
+| where PreviousTime < TimeGenerated
+| summarize arg_min(TimeGenerated, *) by UserPrincipalName, TimeGenerated
+| extend 
+    ImpossibleCountryTravel = iff(Country != PreviousCountry and isnotempty(PreviousCountry), true, false),
+    ImpossibleStateTravel = iff(State != PreviousState and isnotempty(PreviousState), true, false),
+    ImpossibleCityTravel = iff(City != PreviousCity and isnotempty(PreviousCity), true, false)
+| project 
+    TimeGenerated,
+    UserPrincipalName,
+    IPAddress,
+    Country,
+    State,
+    City,
+    PreviousCountry,
+    PreviousState,
+    PreviousCity,
+    ImpossibleCountryTravel,
+    ImpossibleStateTravel,
+    ImpossibleCityTravel,
+    ResultType,
+    SignInOutcome,
+    AppDisplayName,
+    ResourceDisplayName,
+    RiskLevelDuringSignIn,
+    IncomingTokenType,
+    AuthRequirement,
+    AuthMethod,
+    AuthDetail,
+    ClientAppUsed,
+    DeviceDetail,
+    CorrelationId,
+    OriginalRequestId
+| order by TimeGenerated desc

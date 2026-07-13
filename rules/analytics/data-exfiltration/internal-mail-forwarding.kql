@@ -1,0 +1,28 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/internal_mail_forwarding.kql
+// Mail Forwarding Rule Classification (Internal vs. External)
+// MITRE ATT&CK: Collection — Email Collection: Email Forwarding Rule (T1114.003)
+// Detects: Every inbox rule with a "Forward" action, parsed out of the raw
+//          Exchange audit event, and labels each by whether the recipient's
+//          domain matches the sender's own domain. Baseline/triage query —
+//          use the "Forward to External" rows as the actionable subset and
+//          "Forward to Internal" as expected noise.
+// Entity mapping: Account → UPN → UserIdClean
+CloudAppEvents
+| where Application contains "Exchange"
+| where ActionType contains "InboxRules"
+| extend OpsProps = parse_json(RawEventData).OperationProperties
+| mv-expand prop = OpsProps
+| where prop.Name == "RuleActions"
+| extend RuleActionsArray = parse_json(tostring(prop.Value))
+| mv-expand actionItem = RuleActionsArray
+| where tostring(actionItem.ActionType) == "Forward"
+| extend RecipientsArray = todynamic(actionItem.Recipients)
+| mv-expand Recipient = RecipientsArray
+| extend RecipientClean = tolower(tostring(Recipient))
+| extend UserIdClean = tolower(tostring(parse_json(RawEventData).UserId))
+| extend UserDomain = tostring(split(UserIdClean, "@")[1])
+| extend RecipientDomain = tostring(split(RecipientClean, "@")[1])
+| extend Result = iff(RecipientDomain != UserDomain, "Forward to External", "Forward to Internal")
+| project TimeGenerated, UserIdClean, RecipientClean, RecipientDomain, Result
+| sort by TimeGenerated desc

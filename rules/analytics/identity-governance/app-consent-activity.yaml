@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/identity-governance/app_consent_activity.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 0881f839-c11d-46c8-b6a3-f5d63bf8808b
+name: OAuth Application Consent Activity
+description: All OAuth application consent grants tenant-wide. Baseline/hunting query for illicit consent
+  grant attacks — a user tricked into approving a malicious app's permission scopes gives an attacker
+  durable, MFA-independent access to mail/files without ever touching the user's password.
+severity: Medium
+status: Available
+enabled: true
+queryFile: app-consent-activity.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- InitialAccess
+- Persistence
+relevantTechniques:
+- T1528
+- T1098.001

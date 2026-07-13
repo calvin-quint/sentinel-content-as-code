@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/identity/failed_mfa_mobile_notifications.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 4029bb8d-632a-4ffb-8654-1bd5b27b9afa
+name: Failed MFA Mobile Push Notification (Correct Password, Non-US)
+description: The password step succeeding but the mobile app push notification being denied/failing, from
+  a non-US location — the signature of an attacker with a valid stolen password triggering MFA push fatigue/bombing
+  while the real user declines the prompt.
+severity: Medium
+status: Available
+enabled: true
+queryFile: failed-mfa-mobile-notifications.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- CredentialAccess
+relevantTechniques:
+- T1621
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: UPN
+    columnName: UserPrincipalName

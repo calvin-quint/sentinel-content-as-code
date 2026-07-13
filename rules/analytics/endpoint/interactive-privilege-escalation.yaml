@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/endpoint/interactive_privilege_escalation.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 3eac4f2f-5468-4e0d-a691-4c1912789064
+name: Interactive Privilege Escalation
+description: A non-system interactive user session spawning a High-integrity or fully-elevated process
+  from a UAC-prompting binary (msiexec/cmd/powershell/wscript/rundll32), excluding processes initiated
+  by the SYSTEM context. Flags manual UAC-bypass or social-engineered elevation on an endpoint rather
+  than service-account or scheduled-task elevation.
+severity: Medium
+status: Available
+enabled: true
+queryFile: interactive-privilege-escalation.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- PrivilegeEscalation
+- DefenseEvasion
+relevantTechniques:
+- T1548.002
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: Name
+    columnName: User
+- entityType: Host
+  fieldMappings:
+  - identifier: Name
+    columnName: DeviceName

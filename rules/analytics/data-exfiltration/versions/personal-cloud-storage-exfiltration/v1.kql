@@ -1,0 +1,42 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/versions/personal-cloud-storage-exfiltration/v1.kql
+// v1 — earliest Personal Cloud Storage Exfiltration iteration (see
+// ../README.md for lineage). MITRE ATT&CK: Exfiltration to Cloud Storage
+// (T1567.002). Hardcoded 8-domain destination list, no originating-domain
+// check, only 4 DLP sensitive types, requires FileCount >= 2. Superseded by
+// ../../personal_cloud_storage_exfiltration.kql.
+CloudAppEvents
+| where ActionType == "FileUploadedToCloud"
+| extend Raw = parse_json(RawEventData)
+| where tostring(Raw.TargetUrl) contains "drive.google.com"
+    or tostring(Raw.TargetUrl) contains "docs.google.com"
+    or tostring(Raw.TargetUrl) contains "dropbox.com"
+    or tostring(Raw.TargetUrl) contains "box.com"
+    or tostring(Raw.TargetUrl) contains "icloud.com"
+    or tostring(Raw.TargetUrl) contains "onedrive.live.com"
+    or tostring(Raw.TargetUrl) contains "mediafire.com"
+    or tostring(Raw.TargetUrl) contains "wetransfer.com"
+| extend DLP = Raw.SensitiveInfoTypeData
+| where DLP != "" and DLP != "[]"       // Only show files that hit DLP
+| mv-expand DLP                         // Expand each classification
+| extend
+    SensitiveType = tostring(DLP.SensitiveInfoTypeName),
+    SensitiveId = tostring(DLP.SensitiveInfoTypeId),
+    SensitiveCount = toint(DLP.Count),
+    SensitiveConfidence = toint(DLP.Confidence)
+| where SensitiveType contains "Credit Card"
+    or SensitiveType contains "Credential"
+    or SensitiveType contains "Social Security"
+    or SensitiveType contains "Bank Account"
+  | summarize
+      FileCount = count(),
+      FirstEvent = min(TimeGenerated),
+      LastEvent = max(TimeGenerated),
+      SensitiveTypes = make_list(SensitiveType),
+      FileNames = make_list(tostring(Raw.ObjectId))
+      by 
+         User = tostring(Raw.UserId),
+         DeviceName = tostring(Raw.DeviceName),
+         TargetDomain = tostring(Raw.TargetDomain)
+| where FileCount >= 2
+| order by FileCount desc

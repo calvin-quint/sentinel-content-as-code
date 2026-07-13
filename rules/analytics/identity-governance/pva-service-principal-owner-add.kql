@@ -1,0 +1,17 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/identity-governance/pva_service_principal_owner_add.kql
+// Power Virtual Agents Adding Service Principal Owner
+// MITRE ATT&CK: Persistence / Privilege Escalation — Account Manipulation:
+//               Additional Cloud Roles (T1098.003)
+// Detects: A service principal ownership change initiated by Power Virtual
+//          Agents specifically — an unusual actor for this operation. Owning
+//          a service principal grants control over its credentials and
+//          permissions, so a Power Platform bot/flow granting itself or
+//          another principal ownership is a plausible privilege-escalation
+//          path via low-code automation that's easy to overlook.
+// Entity mapping: Account → UPN → userPrincipalName
+AuditLogs
+| where OperationName contains "Add owner to service principal"
+| where tostring(InitiatedBy) contains "Power Virtual Agents"
+| mv-expand TargetResources
+| extend userPrincipalName = tostring(TargetResources.userPrincipalName)

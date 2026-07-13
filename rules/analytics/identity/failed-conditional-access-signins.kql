@@ -1,0 +1,15 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/identity/failed_conditional_access_signins.kql
+// Failed Conditional Access Sign-ins on Risky Accounts
+// MITRE ATT&CK: Initial Access — Valid Accounts: Cloud Accounts (T1078.004)
+// Detects: Sign-ins blocked by Conditional Access (password-change-required,
+//          strong-auth-required, or missing session info) where the account
+//          was already flagged medium/high risk during sign-in. Surfaces
+//          credential-compromise attempts that CA is currently absorbing —
+//          worth a proactive password reset/session revoke rather than
+//          waiting for a successful bypass.
+// Entity mapping: Account → UPN → UserPrincipalName
+SigninLogs
+| where ConditionalAccessStatus == "failure"
+| where Status.errorCode == 50125 or Status.errorCode == 50074 or Status.errorCode == 50058 
+| where RiskLevelDuringSignIn in ("medium", "high")

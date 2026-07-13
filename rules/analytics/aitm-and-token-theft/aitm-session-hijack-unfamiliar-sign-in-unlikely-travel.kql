@@ -1,0 +1,33 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/aitm-and-token-theft/AiTM%20Session%20Hijack%20%E2%80%93%20Unfamiliar%20Sign-in%20%2B%20Unlikely%20Travel.kql
+// AiTM Session Hijack — Unfamiliar Sign-in + Unlikely Travel
+// MITRE ATT&CK: Credential Access — Steal Web Session Cookie (T1539);
+//               Initial Access — Valid Accounts: Cloud Accounts (T1078.004)
+// Detects: A user triggering both an "unfamiliarFeatures" risk event and an
+//          "unlikelyTravel" risk event within 60 minutes of each other — the
+//          classic pairing left behind by an adversary-in-the-middle session
+//          hijack, where the victim signs in normally and the attacker
+//          replays the stolen session from a geographically implausible
+//          location minutes later.
+// Entity mapping: Account → UPN     → UserPrincipalName
+//                 IP      → Address → UnfamiliarIP / TravelIP
+SigninLogs
+| extend RiskEvents = parse_json(RiskEventTypes)
+| where RiskEvents has "unfamiliarFeatures"
+| project
+    UserPrincipalName,
+    UnfamiliarTime = TimeGenerated,
+    UnfamiliarIP = IPAddress,
+    UnfamiliarCountry = tostring(LocationDetails.countryOrRegion)
+| join kind=inner (
+    SigninLogs
+    | extend RiskEvents = parse_json(RiskEventTypes)
+    | where RiskEvents has "unlikelyTravel"
+    | project
+        UserPrincipalName,
+        TravelTime = TimeGenerated,
+        TravelIP = IPAddress,
+        TravelCountry = tostring(LocationDetails.countryOrRegion)
+) on UserPrincipalName
+| where abs(datetime_diff("minute", UnfamiliarTime, TravelTime)) <= 60
+| order by UnfamiliarTime desc

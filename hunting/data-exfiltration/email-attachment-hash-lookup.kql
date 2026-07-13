@@ -1,0 +1,12 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/email_attachment_hash_lookup.kql
+// Email Attachment Hash Lookup ($hash / $NetworkMessageId lookup template)
+// MITRE ATT&CK: N/A — investigation lookup, not a standalone detection
+// Detects: Parameterized query to locate every email carrying a given
+//          attachment SHA256 and/or NetworkMessageId. Used during incident
+//          triage to scope how widely a malicious or leaked attachment
+//          circulated, not to trigger on its own.
+// Entity mapping: File → Hash → $hash (substitute the value under investigation)
+EmailAttachmentInfo
+| where SHA256 contains "$hash"
+| where NetworkMessageId contains "$NetworkMessageId"

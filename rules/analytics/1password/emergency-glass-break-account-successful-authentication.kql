@@ -1,0 +1,12 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/1password/emergency_glass_break_account_successful_authentication.kql
+// 1Password Break-Glass Account Successful Authentication
+// MITRE ATT&CK: Initial Access / Privilege Escalation — Valid Accounts: Cloud Accounts (T1078.004)
+// Detects: Any successful authentication to the emergency break-glass admin
+//          account. This account exists solely for outage/lockout recovery
+//          and should never be used in normal operations — any hit here is
+//          a same-day investigation, not a tuning candidate.
+// Entity mapping: Account → UPN → target_user.email
+OnePasswordEventLogs_CL
+| where tostring(target_user.email) =~ "breakglass-admin@contoso.com"
+| where category == "success"

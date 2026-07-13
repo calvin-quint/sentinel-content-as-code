@@ -1,0 +1,18 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/teams/activity_from_amazon_isp_on_linux_clients.kql
+// Teams Activity from Amazon ISP on Linux Clients
+// MITRE ATT&CK: Collection — Automated Collection (T1119)
+// Detects: Any Microsoft Teams activity originating from an AWS-hosted IP
+//          (ISP contains "Amazon") on a Linux client — the network/OS
+//          fingerprint of a cloud-hosted meeting bot rather than a genuine
+//          employee endpoint. Broadest of the Teams-bot family of rules;
+//          feeds the more targeted non-user-actor and AI-transcription
+//          variants in this folder.
+// Entity mapping: IP → Address → ISP-derived source IP (RawEventData)
+CloudAppEvents
+| where Application contains "Teams"
+| where ISP contains "Amazon"
+| extend Raw = parse_json(RawEventData)
+| mv-expand ep = Raw.ExtraProperties
+| extend EPKey = tostring(ep.Key), EPValue = tostring(ep.Value)
+| where EPKey == "OsName" and EPValue == "linux"

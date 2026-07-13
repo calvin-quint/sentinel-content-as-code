@@ -10,21 +10,70 @@ a Sentinel workspace via the Azure REST API when merged to `main`.
 rules/
   analytics/
     <category>/
-      <rule-name>.yaml       # one Scheduled analytics rule per file
+      <rule-name>.yaml       # rule metadata, references the sibling .kql
+      <rule-name>.kql        # KQL query body
+      versions/               # optional: archived prior query versions (not deployed)
+hunting/
+  <category>/
+    <query-name>.kql          # saved-search / enrichment queries — not analytics rules,
+                               # not deployed by this pipeline (no matching YAML)
 schemas/
   analytics-rule.schema.json # JSON Schema all rule YAML is validated against
 scripts/
-  rule_transform.py          # YAML -> Sentinel REST API body
-  validate_rules.py          # schema + duplicate-id validation
+  rule_transform.py          # YAML (+ .kql) -> Sentinel REST API body
+  validate_rules.py          # schema + duplicate-id + queryFile validation
   deploy_rules.py            # deploys (PUTs) rules via `az rest`
+  import_from_docs.py        # repeatable importer from calvin-quint/docs KQL headers
 .github/workflows/
   validate-rules.yml         # runs on every PR touching rules/schemas/scripts
   deploy-rules.yml           # runs on push to main, deploys changed rules
 ```
 
-Rules are grouped into folders by primary MITRE ATT&CK tactic (e.g.
-`initial-access`, `credential-access`) purely for organization — the
+Rules are grouped into folders by category (e.g. `identity`,
+`credential-access`, `aitm-and-token-theft`) purely for organization — the
 folder name has no functional effect. Add new categories as needed.
+
+A rule's query can be given either inline (`query:`) or, more commonly,
+as a reference to a sibling file (`queryFile: <name>.kql`) so the KQL gets
+proper syntax highlighting and can be edited on its own. Exactly one of
+the two must be set — the schema rejects both or neither.
+
+### Imported content
+
+Most rules under `rules/analytics/` were imported from
+[`calvin-quint/docs`](https://github.com/calvin-quint/docs)'s
+`01-detection-engineering/kql/` collection via `scripts/import_from_docs.py`,
+which parses that repo's `// Author / GitHub / Title / MITRE ATT&CK /
+Detects / Entity mapping` header-comment convention into YAML metadata.
+The importer is idempotent — re-running it reuses the `id` already
+present in an existing YAML file instead of minting a new one, so pulling
+in updates from the source repo won't create duplicate Sentinel rules.
+
+A handful of source queries are lookup/enrichment templates rather than
+standalone alerts (parameterized `$UPN`-style lookups, raw enrichment
+feeds) — those were imported as plain `.kql` files under `hunting/`
+instead of being wrapped as analytics rules, since they have no
+`enabled`/`queryFrequency`/etc. of their own.
+
+Rules imported from a source `.kql` file that had no explicit
+`Severity: ... | Frequency: ... | Period: ...` header default to
+`Medium` / `PT1H` / `PT1H` — those YAML files carry a `# NOTE:` comment
+flagging them for review; search for it before treating severity/schedule
+as final:
+
+```bash
+grep -rl "NOTE: source had no explicit" rules/analytics/
+```
+
+To pull in further updates from the docs repo later:
+
+```bash
+cd scripts
+python import_from_docs.py \
+  /path/to/docs/01-detection-engineering/kql \
+  ../rules/analytics \
+  ../hunting
+```
 
 ## Authoring a rule
 
@@ -37,7 +86,7 @@ starting point. Required fields:
 | `name`            | Display name shown in Sentinel.                                    |
 | `description`     | Free text.                                                         |
 | `severity`        | `Informational` \| `Low` \| `Medium` \| `High`                     |
-| `query`           | KQL query body.                                                    |
+| `query` / `queryFile` | KQL query body, inline or as a path to a sibling `.kql` file. Exactly one required. |
 | `queryFrequency`  | ISO 8601 duration, e.g. `PT1H`.                                    |
 | `queryPeriod`     | ISO 8601 duration, e.g. `PT1H`.                                    |
 | `triggerOperator` | `gt` \| `lt` \| `eq` \| `ne`                                        |

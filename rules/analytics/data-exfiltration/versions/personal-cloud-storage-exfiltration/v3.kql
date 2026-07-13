@@ -1,0 +1,52 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/versions/personal-cloud-storage-exfiltration/v3.kql
+// v3 — drops the fixed destination-domain list in favor of an exclusion
+// approach (anything not org/Azure-owned) gated on org-domain source (see
+// ../README.md for lineage). MITRE ATT&CK: Exfiltration to Cloud Storage
+// (T1567.002). Broader net than v1/v2 but coarser thresholding
+// (FileCount >= 10). Superseded by ../../personal_cloud_storage_exfiltration.kql.
+CloudAppEvents
+| where ActionType == "FileUploadedToCloud"
+| extend Raw = parse_json(RawEventData)
+| where not(tostring(Raw.TargetUrl) contains "contoso")
+      and not(tostring(Raw.TargetUrl) contains "azure")
+| where tostring(Raw.OriginatingDomain) contains "centralparticipant"
+   or tostring(Raw.OriginatingDomain) contains "sharepoint"
+   or tostring(Raw.OriginatingDomain) contains "microsoft"
+   or tostring(Raw.OriginatingDomain) contains "office"
+   or tostring(Raw.OriginatingDomain) contains "contoso"
+| extend DLP = Raw.SensitiveInfoTypeData
+| where DLP != "" and DLP != "[]"
+| mv-expand DLP
+| extend
+      SensitiveType = tostring(DLP.SensitiveInfoTypeName),
+      SensitiveCount = toint(DLP.Count),
+      SensitiveConfidence = toint(DLP.Confidence)
+| where SensitiveType contains "Social"
+   or SensitiveType contains "Credit"
+   or SensitiveType contains "Address"
+   or SensitiveType contains "Bank"
+   or SensitiveType contains "Medical"
+   or SensitiveType contains "License"
+   or SensitiveType contains "Credential"
+| summarize
+      FileCount = dcount(tostring(Raw.ObjectId)),
+      SensitiveHitCount = sum(SensitiveCount),
+      FirstEvent = min(TimeGenerated),
+      LastEvent = max(TimeGenerated),
+      SensitiveTypes = make_set(SensitiveType),
+      FilePaths = make_set(tostring(Raw.ObjectId)),
+      TargetUrls = make_set(tostring(Raw.TargetUrl)),
+      OriginatingDomains = make_set(tostring(Raw.OriginatingDomain)),
+      IPs = make_set(tostring(Raw.ClientIP)),
+      Cities = make_set(City),
+      Countries = make_set(CountryCode),
+      Apps = make_set(tostring(Raw.Application)),
+      FileExtensions = make_set(tostring(Raw.FileExtension)),
+      FileSizes = make_set(toint(Raw.FileSize))
+      by 
+         User = tostring(Raw.UserId),
+         DeviceName = tostring(Raw.DeviceName),
+         TargetDomain = tostring(Raw.TargetDomain)
+| where FileCount >= 10 or SensitiveHitCount >= 1
+| order by SensitiveHitCount desc

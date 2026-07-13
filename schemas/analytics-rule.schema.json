@@ -10,11 +10,14 @@
     "name",
     "description",
     "severity",
-    "query",
     "queryFrequency",
     "queryPeriod",
     "triggerOperator",
     "triggerThreshold"
+  ],
+  "oneOf": [
+    { "required": ["query"] },
+    { "required": ["queryFile"] }
   ],
   "properties": {
     "id": {
@@ -69,7 +72,12 @@
     },
     "query": {
       "type": "string",
-      "description": "KQL query body.",
+      "description": "KQL query body, inline. Mutually exclusive with queryFile.",
+      "minLength": 1
+    },
+    "queryFile": {
+      "type": "string",
+      "description": "Path to a .kql file containing the query, relative to this YAML file's directory. Mutually exclusive with query.",
       "minLength": 1
     },
     "queryFrequency": {

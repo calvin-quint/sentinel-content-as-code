@@ -1,0 +1,12 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/identity/passkey_auth_success.kql
+// Successful Passkey Authentication
+// MITRE ATT&CK: N/A — adoption/baseline tracking query, not a threat detection
+// Detects: All sign-ins where a passkey authentication step succeeded. Used
+//          to track passwordless/passkey rollout adoption across the tenant
+//          rather than to flag malicious activity.
+// Entity mapping: Account → UPN → UserPrincipalName
+SigninLogs
+| mv-expand todynamic(AuthenticationDetails)
+| where AuthenticationDetails.succeeded == true
+    and AuthenticationDetails.authenticationMethod contains "passkey"
