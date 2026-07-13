@@ -1,0 +1,52 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/ueba/anomalous_exchange_activity.kql
+// UEBA Anomalous Exchange Activity
+// MITRE ATT&CK: Collection — Email Collection: Email Forwarding Rule (T1114.003)
+//               for inbox-rule anomalies; Tactics/Techniques are also
+//               surfaced natively per-event from the UEBA Anomalies table
+// Severity: Medium | Frequency: PT1H | Period: PT1H
+// Suppression: PT24H | Grouping: By Account, 24h window
+// Covers: Post-compromise persistence (inbox rules) and
+//         collection (mail access) signals from Exchange UEBA
+// Entity mapping: Account → FullName → UserPrincipalName
+//                 Account → Name → Account_0_Name
+//                 Account → UPNSuffix → Account_0_UPNSuffix
+
+Anomalies
+| where TimeGenerated > ago(1h)
+| where AnomalyTemplateName == "Anomalous user activities in Office Exchange"
+| where Score >= 0.5
+| extend ReasonsStr = tostring(AnomalyReasons)
+| extend
+    IsInboxRuleAnomaly = ReasonsStr has_any (
+        "UpdateInboxRules",
+        "NewInboxRule",
+        "SetInboxRule"
+    ),
+    IsMailAccessAnomaly = ReasonsStr has_any (
+        "MailItemsAccessed",
+        "MessageBind"
+    )
+| summarize
+    EventCount          = count(),
+    MaxScore            = max(Score),
+    FirstSeen           = min(TimeGenerated),
+    LastSeen            = max(TimeGenerated),
+    Descriptions        = make_set(Description, 5),
+    AnomalyReasons      = make_set(ReasonsStr, 5),
+    IsInboxRuleAnomaly  = max(tolong(IsInboxRuleAnomaly)),
+    IsMailAccessAnomaly = max(tolong(IsMailAccessAnomaly))
+    by UserPrincipalName, AnomalyTemplateName,
+       Tactics, Techniques
+| where isnotempty(UserPrincipalName)
+| extend
+    HighFidelitySignal  = IsInboxRuleAnomaly == 1,
+    Account_0_Name      = tostring(split(UserPrincipalName, "@")[0]),
+    Account_0_UPNSuffix = tostring(split(UserPrincipalName, "@")[1])
+| project
+    FirstSeen, LastSeen, UserPrincipalName,
+    AnomalyTemplateName, MaxScore, EventCount,
+    IsInboxRuleAnomaly, IsMailAccessAnomaly, HighFidelitySignal,
+    Descriptions, AnomalyReasons, Tactics, Techniques,
+    Account_0_Name, Account_0_UPNSuffix
+| sort by HighFidelitySignal desc, MaxScore desc

@@ -45,14 +45,27 @@ def validate_rule(rule: dict, schema: dict, source: str) -> list[str]:
     return errors
 
 
-def to_arm_properties(rule: dict) -> dict[str, Any]:
+def resolve_query(rule: dict, yaml_path: Path) -> str:
+    """Return the KQL query text, loading it from queryFile if used."""
+    if "query" in rule:
+        return rule["query"]
+    query_file = rule.get("queryFile")
+    if not query_file:
+        raise ValueError(f"{yaml_path}: rule has neither 'query' nor 'queryFile'")
+    resolved = (yaml_path.parent / query_file).resolve()
+    if not resolved.is_file():
+        raise ValueError(f"{yaml_path}: queryFile not found: {resolved}")
+    return resolved.read_text(encoding="utf-8")
+
+
+def to_arm_properties(rule: dict, query_text: str) -> dict[str, Any]:
     """Convert a validated rule dict into Sentinel alertRules API properties."""
     properties: dict[str, Any] = {
         "displayName": rule["name"],
         "description": rule["description"],
         "severity": rule["severity"],
         "enabled": rule.get("enabled", True),
-        "query": rule["query"],
+        "query": query_text,
         "queryFrequency": rule["queryFrequency"],
         "queryPeriod": rule["queryPeriod"],
         "triggerOperator": rule["triggerOperator"],
@@ -78,10 +91,11 @@ def to_arm_properties(rule: dict) -> dict[str, Any]:
     return properties
 
 
-def to_arm_body(rule: dict) -> dict[str, Any]:
+def to_arm_body(rule: dict, yaml_path: Path) -> dict[str, Any]:
+    query_text = resolve_query(rule, yaml_path)
     return {
         "kind": rule.get("kind", "Scheduled"),
-        "properties": to_arm_properties(rule),
+        "properties": to_arm_properties(rule, query_text),
     }
 
 

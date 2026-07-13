@@ -1,0 +1,40 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/aitm-and-token-theft/Device%20Code%20Sign-In%20From%20Unmanaged%20Device.kql
+// Device Code Sign-In From Unmanaged Device (real-time, IP-baselined)
+// MITRE ATT&CK: Credential Access — Steal Application Access Token (T1528)
+// Detects: Real-time (1-hour lookback) device-code sign-ins from an
+//          untrusted network location where the device trust type is empty
+//          or "Unmanaged," enriched against a 14-day per-user IP baseline to
+//          flag whether the source IP is new. Tighter, near-real-time sibling
+//          of the noncompliant/unmanaged device-code rule — built for fast
+//          triage rather than historical hunting.
+// Entity mapping: Account → UPN     → UserPrincipalName
+//                 IP      → Address → IPAddress
+let ipBaseline = SigninLogs
+    | where TimeGenerated > ago(14d)
+    | where ResultType == "0"
+    | summarize KnownIPs = make_set(IPAddress) by UserPrincipalName;
+SigninLogs
+| where TimeGenerated > ago(1h)
+| where ResultType == "0"
+| where not(NetworkLocationDetails has "namedLocation")
+| where AuthenticationProtocol == "deviceCode"
+| extend DeviceTrustType = tostring(DeviceDetail.trustType)
+| extend DeviceCompliant = tostring(DeviceDetail.isCompliant)
+| where DeviceTrustType == "" or DeviceTrustType == "Unmanaged"
+| extend Country = tostring(LocationDetails.countryOrRegion)
+| extend City = tostring(LocationDetails.city)
+| join kind=leftouter ipBaseline on UserPrincipalName
+| extend NewIP = not(IPAddress in (KnownIPs))
+| project
+    TimeGenerated,
+    UserPrincipalName,
+    IPAddress,
+    NewIP,
+    Location = strcat(City, ", ", Country),
+    DeviceTrustType,
+    DeviceCompliant,
+    AppDisplayName,
+    AuthenticationProtocol,
+    RiskLevelDuringSignIn
+| order by TimeGenerated desc

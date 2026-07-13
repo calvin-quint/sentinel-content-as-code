@@ -1,0 +1,15 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/aitm-and-token-theft/versions/token-theft-and-replay-detection/v1.kql
+// v1 — earliest Token Theft and Replay Detection iteration (see ../README.md
+// for lineage). MITRE ATT&CK: Use Alternate Authentication Material: Web
+// Session Cookie (T1550.004). Geography-based only (Location != "US"),
+// no correlation or risk scoring. Superseded by ../../Token Theft and
+// Replay Detection.kql.
+SigninLogs
+| where TimeGenerated > ago(7d)
+| where AuthenticationRequirement == "multiFactorAuthentication"
+| where Location != "US"
+| where AuthenticationDetails has "MFA requirement satisfied by claim in the token"
+| where AuthenticationDetails has "Previously satisfied"
+| where ConditionalAccessStatus == "notApplied" // optional, depending on environment
+| project TimeGenerated, UserPrincipalName, IPAddress, Location, AppDisplayName, ClientAppUsed, AuthenticationDetails, DeviceDetail

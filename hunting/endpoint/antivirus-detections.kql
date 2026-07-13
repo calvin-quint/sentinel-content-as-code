@@ -1,0 +1,10 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/endpoint/antivirus_detections.kql
+// Defender Antivirus Detections
+// MITRE ATT&CK: Execution — technique varies by payload (generic AV signature feed)
+// Detects: Raw feed of Microsoft Defender Antivirus detection events from
+//          DeviceEvents. Used as a base lookup/enrichment source for other
+//          rules and manual triage rather than a standalone alert — pair
+//          with the specific malware family/behavior to map an exact technique.
+DeviceEvents
+| where ActionType == "AntivirusDetection"

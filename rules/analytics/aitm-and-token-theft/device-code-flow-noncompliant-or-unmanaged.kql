@@ -1,0 +1,25 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/aitm-and-token-theft/Device%20Code%20Flow%20-%20Noncompliant%20or%20Unmanaged.kql
+// Device Code Flow — Noncompliant or Unmanaged Device
+// MITRE ATT&CK: Credential Access — Steal Application Access Token (T1528);
+//               Initial Access — Phishing (T1566, when paired with the
+//               URL-click correlation rule in this folder)
+// Detects: Successful device-code-flow authentications where the resulting
+//          device is not marked compliant or not managed. Device code flow
+//          is the mechanism abused in device-code phishing (the victim is
+//          lured into entering an attacker-generated code), so any
+//          successful use from a device Intune has never seen is a strong
+//          post-compromise indicator.
+// Entity mapping: Account → UPN → UserPrincipalName
+//                 Device  → Id  → DeviceId
+//                 IP      → Address → IPAddress
+SigninLogs
+| where AuthenticationProtocol == "deviceCode"
+| where ResultType == "0"
+| where tobool(DeviceDetail.isCompliant) != true
+      or tobool(DeviceDetail.isManaged) != true
+| extend DeviceId = tostring(DeviceDetail.deviceId)
+| project TimeGenerated, UserPrincipalName, IPAddress, Location,
+          AuthenticationProtocol, AppDisplayName, ResourceDisplayName,
+          UserAgent, RiskLevelDuringSignIn, DeviceId
+| order by TimeGenerated desc

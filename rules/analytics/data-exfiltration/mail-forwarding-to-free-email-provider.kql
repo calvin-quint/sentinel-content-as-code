@@ -1,0 +1,68 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/mail_forwarding_to_free_email_provider.kql
+// Mail Forwarding to Free/Personal Email Provider
+// MITRE ATT&CK: Collection — Email Collection: Email Forwarding Rule
+//               (T1114.003); Exfiltration — Exfiltration Over Web Service (T1567)
+// Detects: Mailbox forwarding or inbox-rule redirects whose destination
+//          domain matches a known consumer webmail provider (Gmail, Yahoo,
+//          Outlook.com, iCloud, ProtonMail, etc.). Narrower and higher-
+//          confidence than the general external-forwarding rule — forwarding
+//          to a personal inbox has essentially no legitimate business
+//          reason and is a common self-exfiltration or departing-employee pattern.
+// Entity mapping: Account → Name/UPNSuffix → AccountName/AccountUPNSuffix
+//                 IP      → Address        → ClientIPAddress
+let PersonalDomains = datatable(domain:string)[
+    "gmail.com", "googlemail.com",
+    "yahoo.com", "ymail.com", "yahoo.co.uk",
+    "hotmail.com", "outlook.com", "live.com", "msn.com",
+    "icloud.com", "me.com", "mac.com",
+    "protonmail.com", "proton.me",
+    "aol.com",
+    "zoho.com",
+    "gmx.com", "gmx.net",
+    "mail.com"
+];
+OfficeActivity
+| where OfficeWorkload == "Exchange"
+| where (Operation == "Set-Mailbox" and Parameters contains "ForwardingSmtpAddress")
+    or (Operation in ("New-InboxRule", "Set-InboxRule")
+        and (Parameters contains "ForwardTo" or Parameters contains "RedirectTo"))
+| extend ParametersJson = parse_json(Parameters)
+| mv-expand Param = ParametersJson
+| extend paramName  = tostring(Param.Name)
+| extend paramValue = tostring(Param.Value)
+| where paramName in ("ForwardingSmtpAddress", "ForwardTo", "RedirectTo", "ForwardingAddress")
+| where isnotempty(paramValue)
+| mv-expand fwdingDestination = split(paramValue, ";")
+| extend fwdingDestination = trim(" ", tostring(fwdingDestination))
+| extend fwdingDestination = iff(fwdingDestination has "smtp:", split(fwdingDestination, ":")[1], fwdingDestination)
+| where isnotempty(fwdingDestination)
+| parse fwdingDestination with * "@" ForwardedtoDomain
+| where isnotempty(ForwardedtoDomain)
+| join kind=inner PersonalDomains on $left.ForwardedtoDomain == $right.domain
+| extend RuleName   = extract(@'"Name":"Name","Value":"([^"]+)"', 1, Parameters)
+| extend RuleEnabled = extract(@'"Name":"Enabled","Value":"?([^",}]+)"?', 1, Parameters)
+| extend ClientIPAddress = case(
+    ClientIP has "." and ClientIP has ":", tostring(split(ClientIP, ":")[0]),
+    ClientIP has "[",                      trim_start(@"\[", tostring(split(ClientIP, "]")[0])),
+    ClientIP)
+| extend Port = case(
+    ClientIP has "." and ClientIP has ":", tostring(split(ClientIP, ":")[1]),
+    ClientIP has "[",                      tostring(split(ClientIP, "]:")[1]),
+    "")
+| extend AccountName      = tostring(split(UserId, "@")[0])
+| extend AccountUPNSuffix = tostring(split(UserId, "@")[1])
+| project
+    TimeGenerated,
+    AccountName,
+    AccountUPNSuffix,
+    Operation,
+    RuleName,
+    RuleEnabled,
+    fwdingDestination,
+    ForwardedtoDomain,
+    ClientIPAddress,
+    Port,
+    OriginatingServer,
+    OfficeObjectId
+| sort by TimeGenerated desc

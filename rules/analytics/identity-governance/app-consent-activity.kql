@@ -1,0 +1,13 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/identity-governance/app_consent_activity.kql
+// OAuth Application Consent Activity
+// MITRE ATT&CK: Initial Access — Steal Application Access Token (T1528);
+//               Persistence — Account Manipulation: Additional Cloud
+//               Credentials (T1098.001)
+// Detects: All OAuth application consent grants tenant-wide. Baseline/hunting
+//          query for illicit consent grant attacks — a user tricked into
+//          approving a malicious app's permission scopes gives an attacker
+//          durable, MFA-independent access to mail/files without ever
+//          touching the user's password.
+CloudAppEvents
+| where ActionType == "Consent to application."

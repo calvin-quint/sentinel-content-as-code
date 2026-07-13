@@ -1,0 +1,23 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/meeting_links_to_ai_services.kql
+// Meeting Invite Links Sent to AI Transcription Services
+// MITRE ATT&CK: Collection — Automated Collection (T1119); Exfiltration —
+//               Exfiltration Over Web Service (T1567)
+// Detects: Outbound emails containing a Teams/Zoom meeting join link where
+//          the recipient address belongs to an AI note-taking service
+//          (otter.ai, read.ai) — i.e. someone forwarding or CC'ing a meeting
+//          invite so the bot auto-joins. Email-based companion to the
+//          Teams-bot detections in the teams/ folder; catches the invite
+//          step rather than the bot's in-meeting activity.
+// Entity mapping: Account → Address → SenderFromAddress
+let meetingUrls = dynamic(["teams.microsoft.com/l/meetup-join", "zoom.us"]);
+let targetDomains = dynamic(["otter.ai", "read.ai"]);
+EmailUrlInfo
+| where Url has_any(meetingUrls)
+| join kind=inner (
+    EmailEvents
+    | where RecipientEmailAddress has_any(targetDomains)
+    | project NetworkMessageId, SenderFromAddress, RecipientEmailAddress, Subject, Timestamp
+) on NetworkMessageId
+| project Timestamp, SenderFromAddress, RecipientEmailAddress, Subject, Url
+| order by Timestamp desc

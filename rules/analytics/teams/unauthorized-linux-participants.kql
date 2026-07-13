@@ -1,0 +1,20 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/teams/unauthorized_linux_participants.kql
+// Unauthenticated Linux Participants in Teams Meetings
+// MITRE ATT&CK: Collection — Automated Collection (T1119); Initial Access —
+//               Trusted Relationship / meeting-link abuse (T1199)
+// Detects: Near-real-time (15-minute window) Teams meetings where
+//          `HasUnauthenticatedUsers` is true and a participant's client OS
+//          is Linux — an unauthenticated join from a Linux fingerprint is
+//          consistent with a scripted/bot participant slipping in via a
+//          shared meeting link rather than a genuine guest attendee.
+CloudAppEvents
+| where TimeGenerated >= ago(15m)
+| where Application contains "Teams"
+| extend Raw = parse_json(RawEventData)
+| mv-expand ep = Raw.ExtraProperties
+| extend ParticipantInfo = parse_json(tostring(Raw.ParticipantInfo))
+| extend EPKey = tostring(ep.Key), EPValue = tostring(ep.Value)
+| extend HasUnauthenticatedUsers = tostring(ParticipantInfo.HasUnauthenticatedUsers)
+| where HasUnauthenticatedUsers == "true"
+| where EPKey == "OsName" and EPValue == "linux"

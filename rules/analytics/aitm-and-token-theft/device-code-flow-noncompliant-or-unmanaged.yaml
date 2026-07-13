@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/aitm-and-token-theft/Device Code Flow - Noncompliant or Unmanaged.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 9237c592-6304-45da-a8a9-663f777ef9e8
+name: Device Code Flow — Noncompliant or Unmanaged Device
+description: Successful device-code-flow authentications where the resulting device is not marked compliant
+  or not managed. Device code flow is the mechanism abused in device-code phishing (the victim is lured
+  into entering an attacker-generated code), so any successful use from a device Intune has never seen
+  is a strong post-compromise indicator.
+severity: Medium
+status: Available
+enabled: true
+queryFile: device-code-flow-noncompliant-or-unmanaged.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- CredentialAccess
+- InitialAccess
+relevantTechniques:
+- T1528
+- T1566
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: UPN
+    columnName: UserPrincipalName
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: IPAddress

@@ -32,8 +32,8 @@ from rule_transform import (
 )
 
 
-def deploy_rule(rule: dict, url: str) -> None:
-    body = to_arm_body(rule)
+def deploy_rule(rule: dict, url: str, yaml_path: Path) -> None:
+    body = to_arm_body(rule, yaml_path)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(body, f)
         payload_path = f.name
@@ -102,7 +102,7 @@ def main() -> int:
         url = alert_rule_url(subscription_id, resource_group, workspace_name, rule["id"])
         print(f"deploying {path} (id={rule['id']}, name={rule['name']!r}) ...", end=" ")
         try:
-            deploy_rule(rule, url)
+            deploy_rule(rule, url, path)
             print("done")
         except RuntimeError as exc:
             had_errors = True

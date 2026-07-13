@@ -1,0 +1,92 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/versions/personal-cloud-storage-exfiltration/v4.kql
+// v4 — drops the originating/target domain filtering entirely (any upload
+// with a DLP sensitive-type hit qualifies) and joins against Purview
+// DlpRuleMatch events for corroboration (see ../README.md for lineage).
+// MITRE ATT&CK: Exfiltration to Cloud Storage (T1567.002). Broadest/noisiest
+// version — no destination-risk tiering yet. Superseded by
+// ../../personal_cloud_storage_exfiltration.kql.
+CloudAppEvents
+| where ActionType in (
+    "FileSyncUploadedFull",
+    "FileUploaded",
+    "FileUploadedToCloud",
+    "FileUploadedPartial",
+    "TeamsMeetingRecordingUploaded"
+)
+| extend Raw = parse_json(RawEventData)
+| extend
+    UserUPN              = tolower(AccountId),
+    DeviceName           = tostring(Raw.DeviceName),
+    TargetDomain         = tostring(Raw.TargetDomain),
+    RawTargetUrl         = tostring(Raw.TargetUrl),
+    RawOriginatingDomain = tostring(Raw.OriginatingDomain)
+| where isnotempty(Raw.SensitiveInfoTypeData)
+| extend DLP = Raw.SensitiveInfoTypeData
+| where DLP != "" and DLP != "[]"
+| mv-expand DLP
+| extend
+    SensitiveType       = tostring(DLP.SensitiveInfoTypeName),
+    SensitiveCount      = toint(DLP.Count),
+    SensitiveConfidence = toint(DLP.Confidence)
+| where SensitiveType has_any (
+    "Social",
+    "Credit",
+    "Address",
+    "Bank",
+    "Medical",
+    "License",
+    "Credential"
+)
+| summarize
+    FileCount           = dcount(tostring(ObjectId)),
+    SensitiveHitCount   = sum(SensitiveCount),
+    MaxConfidence       = max(SensitiveConfidence),
+    SensitiveTypes      = make_set(SensitiveType),
+    Files               = make_set(ObjectName),
+    FileExtensions      = make_set(tostring(Raw.FileExtension)),
+    FileSizes           = make_set(toint(Raw.FileSize)),
+    TargetUrls          = make_set(RawTargetUrl),
+    OriginatingDomains  = make_set(RawOriginatingDomain),
+    Apps                = make_set(Application),
+    IPs                 = make_set(IPAddress),
+    Devices             = make_set(DeviceType),
+    FirstSeen           = min(TimeGenerated),
+    LastSeen            = max(TimeGenerated)
+by
+    UserUPN,
+    DeviceName,
+    TargetDomain
+| where SensitiveHitCount >= 1
+| join kind=leftouter (
+    OfficeActivity
+    | where Operation == "DlpRuleMatch"
+    | project
+        OA_UPN = tolower(UserId),
+        DlpRuleName   = tostring(column_ifexists("DlpRuleName", "")),
+        DlpPolicyName = tostring(column_ifexists("DlpPolicyName", "")),
+        OfficeWorkload = tostring(column_ifexists("OfficeWorkload", ""))
+) on $left.UserUPN == $right.OA_UPN
+| summarize
+    FileCount         = any(FileCount),
+    SensitiveHitCount = any(SensitiveHitCount),
+    MaxConfidence     = any(MaxConfidence),
+    SensitiveTypes    = any(SensitiveTypes),
+    Files             = any(Files),
+    FileExtensions    = any(FileExtensions),
+    FileSizes         = any(FileSizes),
+    TargetUrls        = any(TargetUrls),
+    OriginatingDomains = any(OriginatingDomains),
+    Apps              = any(Apps),
+    IPs               = any(IPs),
+    Devices           = any(Devices),
+    OfficeWorkloads   = make_set(OfficeWorkload),
+    DlpRules          = make_set(DlpRuleName),
+    DlpPolicies       = make_set(DlpPolicyName),
+    FirstSeen         = min(FirstSeen),
+    LastSeen          = max(LastSeen)
+by
+    UserUPN,
+    DeviceName,
+    TargetDomain
+| order by SensitiveHitCount desc

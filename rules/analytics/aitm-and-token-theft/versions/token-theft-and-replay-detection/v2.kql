@@ -1,0 +1,14 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/aitm-and-token-theft/versions/token-theft-and-replay-detection/v2.kql
+// v2 — pivots from geography to risk-based targeting (see ../README.md for
+// lineage). MITRE ATT&CK: Use Alternate Authentication Material: Web
+// Session Cookie (T1550.004). Adds RiskLevelDuringSignIn == "high" +
+// ConditionalAccessStatus == "success" gating, still no travel correlation.
+// Superseded by ../../Token Theft and Replay Detection.kql.
+SigninLogs
+| where Status.errorCode == 0
+    and RiskLevelDuringSignIn == "high"
+    and AuthenticationDetails has "MFA requirement satisfied by claim in the token"
+    and AuthenticationDetails has "Previously satisfied"
+    and (IncomingTokenType == "none" or isnull(IncomingTokenType))
+    and ConditionalAccessStatus == "success"

@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/azure-infrastructure/new_azure_vnet_created.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 12431f0b-3f10-4edd-8492-a6a38ebbb6ba
+name: New Azure Virtual Network Created
+description: First-seen creation of a new Azure virtual network, keyed by VNet name + caller. Attacker-controlled
+  or unsanctioned VNets are often stood up to isolate staging infrastructure or open network paths that
+  bypass existing segmentation — review against known change requests.
+severity: Medium
+status: Available
+enabled: true
+queryFile: new-azure-vnet-created.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- DefenseEvasion
+- Persistence
+relevantTechniques:
+- T1578
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: Name
+    columnName: AccountName
+  - identifier: UPNSuffix
+    columnName: AccountUPNSuffix
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: CallerIpAddress

@@ -1,0 +1,34 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/identity/successful_authentication_with_high_risk_ca_block.kql
+// Successful Authentication Steps on a High-Risk, CA-Blocked Sign-in
+// MITRE ATT&CK: Initial Access — Valid Accounts: Cloud Accounts (T1078.004)
+// Detects: Sign-ins where Conditional Access blocked the overall attempt
+//          (ResultType 53003, high risk) but the underlying authentication
+//          step(s) — password/MFA — actually succeeded. This means the
+//          credentials/second factor were valid; CA is the only thing that
+//          stopped the sign-in, so these accounts warrant a credential
+//          reset even though no breach technically occurred.
+// Entity mapping: Account → UPN  → UserPrincipalName
+//                 IP      → Address → IPAddress
+SigninLogs
+| where ResultType == 53003
+| where ResultDescription has "Access has been blocked due to conditional access policies."
+| where RiskLevelDuringSignIn == "high"
+| extend AuthDetails = parse_json(AuthenticationDetails)
+| mv-expand AuthDetails
+| where tostring(AuthDetails.succeeded) == "true"
+| project
+    TimeGenerated,
+    UserDisplayName,
+    UserPrincipalName,
+    IPAddress,
+    Location = tostring(LocationDetails.countryOrRegion),
+    AuthenticationRequirement,
+    RiskLevelDuringSignIn,
+    AuthenticationMethod = tostring(AuthDetails.authenticationMethod),
+    AuthSucceeded = tostring(AuthDetails.succeeded),
+    ConditionalAccessPolicies,
+    UserAgent,
+    ResourceDisplayName,
+    Status
+| order by TimeGenerated desc

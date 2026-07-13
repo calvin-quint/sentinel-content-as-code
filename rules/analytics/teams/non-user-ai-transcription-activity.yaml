@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/teams/non_user_ai_transcription_activity.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 93230dc5-1080-486a-88d0-b60aae01f20b
+name: Non-User AI Transcription Bot Activity in Teams
+description: The most specific rule in the Teams-bot family — a non-user actor from AWS infrastructure
+  posting message URLs referencing Otter.ai or Read.ai. Confirms an unsanctioned AI note-taking bot has
+  joined a meeting and is actively pushing meeting content to a third-party SaaS transcription service,
+  which is a direct data exfiltration path if the meeting covers sensitive topics.
+severity: Medium
+status: Available
+enabled: true
+queryFile: non-user-ai-transcription-activity.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Collection
+- Exfiltration
+relevantTechniques:
+- T1119
+- T1567

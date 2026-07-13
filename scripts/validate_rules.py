@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from rule_transform import find_rule_files, load_rule, load_schema, validate_rule
+from rule_transform import find_rule_files, load_rule, load_schema, resolve_query, validate_rule
 
 
 def main() -> int:
@@ -36,6 +36,13 @@ def main() -> int:
             continue
 
         all_errors.extend(validate_rule(rule, schema, str(path)))
+
+        try:
+            query_text = resolve_query(rule, path)
+            if not query_text.strip():
+                all_errors.append(f"{path}: resolved query is empty")
+        except ValueError as exc:
+            all_errors.append(str(exc))
 
         rule_id = rule.get("id")
         if rule_id:

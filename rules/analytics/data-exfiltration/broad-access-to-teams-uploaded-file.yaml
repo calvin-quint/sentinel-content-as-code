@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/data-exfiltration/broad_access_to_teams_uploaded_file.kql
+id: 9ebe5de0-3ad5-4799-b4c8-9b6596756754
+name: Broad Access to Teams Uploaded File
+description: Broad Access to Teams Uploaded File
+severity: Low
+status: Available
+enabled: true
+queryFile: broad-access-to-teams-uploaded-file.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Collection
+relevantTechniques:
+- T1213
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: Name
+    columnName: Account_0_Name
+  - identifier: UPNSuffix
+    columnName: Account_0_UPNSuffix

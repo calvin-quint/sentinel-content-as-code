@@ -1,0 +1,44 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/usb_data_exfiltration.kql
+// USB Mass Storage Bulk File Copy
+// MITRE ATT&CK: Exfiltration — Exfiltration Over Physical Medium: Exfiltration
+//               over USB (T1052.001)
+// Detects: A USB mass-storage device connecting, followed within a
+//          configurable window (default 15 min) by a bulk file copy from
+//          the endpoint exceeding a file-count threshold (default 50).
+//          Optional DeviceNameToSearch filter to scope to a specific host
+//          during a targeted investigation.
+// Entity mapping: Host → Name → DeviceName
+let DeviceNameToSearch = ''; // DeviceName to search for. Leave blank to search all devices.
+let TimespanInSeconds = 900; // Period of time between device insertion and file copy
+let FileCountThreshold = 50;
+let Connections =
+DeviceEvents
+| where (isempty(DeviceNameToSearch) or DeviceName =~ DeviceNameToSearch) and ActionType == "PnpDeviceConnected"
+| extend parsed = parse_json(AdditionalFields)
+| project DeviceId,ConnectionTime = Timestamp, DriveClass = tostring(parsed.ClassName), UsbDeviceId = tostring(parsed.DeviceId), ClassId = tostring(parsed.DeviceId), DeviceDescription = tostring(parsed.DeviceDescription), VendorIds = tostring(parsed.VendorIds)
+| where DriveClass == 'USB' and DeviceDescription == 'USB Mass Storage Device';
+DeviceFileEvents
+| where (isempty(DeviceNameToSearch) or DeviceName =~ DeviceNameToSearch) and InitiatingProcessAccountName != "system" and FolderPath !startswith "c" and FolderPath !startswith @"\"
+| join kind=inner Connections on DeviceId
+| where datetime_diff('second',Timestamp,ConnectionTime) <= TimespanInSeconds
+| extend af = parse_json(AdditionalFields)
+| extend FileSizeBytes = tolong(coalesce(tolong(af["FileSize"]), tolong(af["FileSizeBytes"]), 0))
+| summarize TotalCopiedBytes = sum(FileSizeBytes),
+            FileCount = count(),
+            FirstEvent = min(Timestamp),
+            LastEvent = max(Timestamp),
+            SampleFile = any(FileName)
+  by DeviceId, DeviceName, UsbDeviceId, VendorIds, DeviceDescription
+  | where FileCount >= FileCountThreshold
+| extend TotalCopiedMB = round(TotalCopiedBytes / (1024.0 * 1024.0), 2)
+| project DeviceName,
+          UsbDeviceId,
+          DeviceDescription,
+          VendorIds,
+          FileCount,
+          TotalCopiedMB,
+          FirstEvent,
+          LastEvent,
+          SampleFile
+| order by FileCount desc

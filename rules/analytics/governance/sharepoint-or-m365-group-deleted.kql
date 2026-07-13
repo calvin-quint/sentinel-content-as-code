@@ -1,0 +1,35 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/governance/sharepoint_or_m365_group_deleted.kql
+// SharePoint Site or M365 Group Deleted
+// MITRE ATT&CK: Impact — Data Destruction (T1485)
+// Detects: Deletion of an M365 Group or a SharePoint site, merged from two
+//          sources (Entra group deletion audit + SharePoint site-delete
+//          activity). Covers both a compromised/insider account destroying
+//          collaboration data and accidental deletion needing fast recovery
+//          — 30-day soft-delete window applies to M365 Groups/SharePoint,
+//          so early detection matters for restorability.
+// Entity mapping: Account → UPN → DeletedBy
+//                 Target  → ID  → Target (group ObjectId or Site_Url)
+union
+(
+    CloudAppEvents
+    | where ActionType has "Delete group" or ActionType has "DeleteGroup"
+    | extend Parsed = parse_json(RawEventData)
+    | mv-expand ModifiedProp = Parsed.ModifiedProperties
+    | where ModifiedProp.Name == "GroupType"
+    | extend 
+        GroupType = tostring(ModifiedProp.OldValue),
+        Time = todatetime(Parsed.CreationTime),
+        DeletedBy = tostring(Parsed.UserId),
+        Target = tostring(Parsed.ObjectId)
+    | where GroupType contains "M365 group"
+),
+(
+    OfficeActivity
+    | where OfficeWorkload == "SharePoint"
+    | where Operation == "SiteDeleted"
+    | extend 
+        Time = TimeGenerated,
+        DeletedBy = tostring(UserId),
+        Target = tostring(Site_Url)  // Use Site_Url for SharePoint site URL
+)

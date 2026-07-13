@@ -1,0 +1,84 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/identity/successful_signin_from_non_compliant_device.kql
+// Successful Sign-in from Non-Compliant Device
+// MITRE ATT&CK: Initial Access — Valid Accounts: Cloud Accounts (T1078.004)
+// Severity: Medium | Frequency: PT1H | Period: PT1H
+// Suppression: PT24H | Grouping: By Account, 24h window
+// Replaces: Successful Signin From Non-Compliant Device (gallery)
+// Noise reduction: 14d per-user IP baseline confirmed 69.6% reduction
+// Validated: ~0.2 alerts/day against live tenant data
+// Identity signals surface as enrichment for triage priority — not hard gates
+// Entity mapping: Account → Name → Account_0_Name
+//                 Account → UPNSuffix → Account_0_UPNSuffix
+//                 IP → Address → IPAddress
+
+let IdentityEnrich = IdentityInfo
+    | where isnotempty(AccountUpn)
+    | summarize arg_max(TimeGenerated, *) by AccountUpn
+    | project
+        AccountUpn = tolower(AccountUpn),
+        BlastRadius,
+        Tags;
+let Baseline = SigninLogs
+    | where TimeGenerated between (ago(15d) .. ago(1h))
+    | where ResultType == 0
+    | where tostring(DeviceDetail.isCompliant) == "false"
+    | summarize KnownIPs = make_set(IPAddress) by UserPrincipalName;
+SigninLogs
+| where TimeGenerated > ago(1h)
+| where ResultType == 0
+| where tostring(DeviceDetail.isCompliant) == "false"
+| extend UPNLower = tolower(UserPrincipalName)
+| join kind=leftouter Baseline on UserPrincipalName
+| where not(set_has_element(KnownIPs, IPAddress))
+| join kind=leftouter IdentityEnrich on $left.UPNLower == $right.AccountUpn
+| extend
+    IsHighBlastRadius = BlastRadius == "High",
+    IsMedBlastRadius  = BlastRadius == "Medium",
+    HasEntraRisk      = RiskLevelDuringSignIn != "none"
+        and isnotempty(RiskLevelDuringSignIn),
+    HasCANonSuccess   = ConditionalAccessStatus != "success"
+        and isnotempty(ConditionalAccessStatus)
+| extend
+    RiskPriority = case(
+        HasEntraRisk,                        3,
+        IsHighBlastRadius,                   2,
+        HasCANonSuccess or IsMedBlastRadius, 1,
+        0
+    )
+| extend
+    DeviceId        = tostring(DeviceDetail.deviceId),
+    DeviceName      = tostring(DeviceDetail.displayName),
+    OperatingSystem = tostring(DeviceDetail.operatingSystem),
+    TrustType       = tostring(DeviceDetail.trustType),
+    City            = tostring(LocationDetails.city),
+    Country         = tostring(LocationDetails.countryOrRegion)
+| project
+    TimeGenerated,
+    UserPrincipalName,
+    UserDisplayName,
+    IPAddress,
+    City,
+    Country,
+    AppDisplayName,
+    ResourceDisplayName,
+    DeviceId,
+    DeviceName,
+    OperatingSystem,
+    TrustType,
+    BlastRadius,
+    RiskPriority,
+    IsHighBlastRadius,
+    HasEntraRisk,
+    HasCANonSuccess,
+    ConditionalAccessStatus,
+    RiskLevelDuringSignIn,
+    RiskDetail,
+    AuthenticationRequirement,
+    IsInteractive,
+    Tags
+| extend
+    Account_0_Name      = tostring(split(UserPrincipalName, "@")[0]),
+    Account_0_UPNSuffix = tostring(split(UserPrincipalName, "@")[1]),
+    IP_0_Address        = IPAddress
+| sort by RiskPriority desc, TimeGenerated desc

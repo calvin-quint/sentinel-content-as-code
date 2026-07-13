@@ -1,0 +1,21 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/teams/non_user_ai_transcription_activity.kql
+// Non-User AI Transcription Bot Activity in Teams
+// MITRE ATT&CK: Collection — Automated Collection (T1119); Exfiltration —
+//               Exfiltration Over Web Service (T1567)
+// Detects: The most specific rule in the Teams-bot family — a non-user actor
+//          from AWS infrastructure posting message URLs referencing Otter.ai
+//          or Read.ai. Confirms an unsanctioned AI note-taking bot has
+//          joined a meeting and is actively pushing meeting content to a
+//          third-party SaaS transcription service, which is a direct data
+//          exfiltration path if the meeting covers sensitive topics.
+CloudAppEvents
+| where Application contains "Teams"
+| where ISP contains "Amazon"
+| extend ParsedObjects = parse_json(ActivityObjects)
+| mv-expand obj = ParsedObjects
+| extend Role = tostring(obj.Role), Type = tostring(obj.Type)
+| where Role == "Actor" and Type != "User"
+| extend ParsedRaw = parse_json(RawEventData)
+| extend MessageURLs = tostring(ParsedRaw.MessageURLs)
+| where MessageURLs has "otter.ai" or MessageURLs has "read.ai"

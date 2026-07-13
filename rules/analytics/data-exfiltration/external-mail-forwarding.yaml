@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/data-exfiltration/external_mail_forwarding.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: adf2e88f-be62-4c04-baf8-ae88b36e7dbe
+name: External Mail Forwarding (Non-Org Domain)
+description: Mailbox-level forwarding (Set-Mailbox ForwardingSmtpAddress) or inbox-rule forwarding/redirect
+  actions whose destination domain doesn't match the org's own root domain — the standard post-compromise
+  persistence step for silently exfiltrating a victim's mail without needing repeat access to the mailbox.
+severity: Medium
+status: Available
+enabled: true
+queryFile: external-mail-forwarding.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Collection
+relevantTechniques:
+- T1114.003
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: Name/UPNSuffix
+    columnName: AccountName/AccountUPNSuffix
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: ClientIPAddress

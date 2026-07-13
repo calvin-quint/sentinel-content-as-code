@@ -1,0 +1,85 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/versions/personal-cloud-storage-exfiltration/v2.kql
+// v2 — expands the destination list to ~28 domains and adds an
+// originating-domain (org-source) check and 7 DLP sensitive types (see
+// ../README.md for lineage). MITRE ATT&CK: Exfiltration to Cloud Storage
+// (T1567.002). Still requires both a destination-list match and an explicit
+// org-domain source match. Superseded by ../../personal_cloud_storage_exfiltration.kql.
+CloudAppEvents
+| where ActionType == "FileUploadedToCloud"
+| extend Raw = parse_json(RawEventData)
+| where
+      tostring(Raw.TargetUrl) contains "drive.google.com"
+   or tostring(Raw.TargetUrl) contains "docs.google.com"
+   or tostring(Raw.TargetUrl) contains "dropbox.com"
+   or tostring(Raw.TargetUrl) contains "box.com"
+   or tostring(Raw.TargetUrl) contains "icloud.com"
+   or tostring(Raw.TargetUrl) contains "onedrive.live.com"
+   or tostring(Raw.TargetUrl) contains "mediafire.com"
+   or tostring(Raw.TargetUrl) contains "wetransfer.com"
+   or tostring(Raw.TargetUrl) contains "mega.nz"
+   or tostring(Raw.TargetUrl) contains "mega.io"
+   or tostring(Raw.TargetUrl) contains "sync.com"
+   or tostring(Raw.TargetUrl) contains "pcloud.com"
+   or tostring(Raw.TargetUrl) contains "1drv.ms"
+   or tostring(Raw.TargetUrl) contains "storage.live.com"
+   or tostring(Raw.TargetUrl) contains "public-files.live.com"
+   or tostring(Raw.TargetUrl) contains "disk.yandex.com"
+   or tostring(Raw.TargetUrl) contains "yadi.sk"
+   or tostring(Raw.TargetUrl) contains "koofr.net"
+   or tostring(Raw.TargetUrl) contains "sendspace.com"
+   or tostring(Raw.TargetUrl) contains "zippyshare.com"
+   or tostring(Raw.TargetUrl) contains "anonfiles.com"
+   or tostring(Raw.TargetUrl) contains "pixeldrain.com"
+   or tostring(Raw.TargetUrl) contains "file.io"
+   or tostring(Raw.TargetUrl) contains "pastebin.com"
+   or tostring(Raw.TargetUrl) contains "hastebin.com"
+   or tostring(Raw.TargetUrl) contains "ghostbin.com"
+   or tostring(Raw.TargetUrl) contains "paste.ee"
+   or tostring(Raw.TargetUrl) contains "proton.me"
+   or tostring(Raw.TargetUrl) contains "protondrive.com"
+   or tostring(Raw.TargetUrl) contains "tresorit.com"
+   or tostring(Raw.TargetUrl) contains "github.com"
+   or tostring(Raw.TargetUrl) contains "amazonaws.com"
+   or tostring(Raw.TargetUrl) contains "s3.amazonaws.com"
+| where
+      tostring(Raw.OriginatingDomain) contains "centralparticipant"
+   or tostring(Raw.OriginatingDomain) contains "sharepoint"
+   or tostring(Raw.OriginatingDomain) contains "microsoft"
+   or tostring(Raw.OriginatingDomain) contains "office"
+   or tostring(Raw.OriginatingDomain) contains "contoso"
+| extend DLP = Raw.SensitiveInfoTypeData
+| where DLP != "" and DLP != "[]"
+| mv-expand DLP
+| extend
+      SensitiveType = tostring(DLP.SensitiveInfoTypeName),
+      SensitiveCount = toint(DLP.Count),
+      SensitiveConfidence = toint(DLP.Confidence)
+| where SensitiveType contains "Social"
+   or SensitiveType contains "Credit"
+   or SensitiveType contains "Address"
+   or SensitiveType contains "Bank"
+   or SensitiveType contains "Medical"
+   or SensitiveType contains "License"
+   or SensitiveType contains "Credential"
+| summarize
+      FileCount = dcount(tostring(Raw.ObjectId)),
+      SensitiveHitCount = sum(SensitiveCount),
+      FirstEvent = min(TimeGenerated),
+      LastEvent = max(TimeGenerated),
+      SensitiveTypes = make_set(SensitiveType),
+      FilePaths = make_set(tostring(Raw.ObjectId)),
+      TargetUrls = make_set(tostring(Raw.TargetUrl)),
+      OriginatingDomains = make_set(tostring(Raw.OriginatingDomain)),
+      IPs = make_set(tostring(Raw.ClientIP)),
+      Cities = make_set(City),
+      Countries = make_set(CountryCode),
+      Apps = make_set(tostring(Raw.Application)),
+      FileExtensions = make_set(tostring(Raw.FileExtension)),
+      FileSizes = make_set(toint(Raw.FileSize))
+      by 
+         User = tostring(Raw.UserId),
+         DeviceName = tostring(Raw.DeviceName),
+         TargetDomain = tostring(Raw.TargetDomain)
+| where FileCount >= 1 or SensitiveHitCount >= 1
+| order by SensitiveHitCount desc

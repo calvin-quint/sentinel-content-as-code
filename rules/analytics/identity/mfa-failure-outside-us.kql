@@ -1,0 +1,23 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/identity/mfa_failure_outside_us.kql
+// MFA Failure Outside the US (Correct Password)
+// MITRE ATT&CK: Credential Access — Multi-Factor Authentication Request
+//               Generation (T1621); Initial Access — Valid Accounts (T1078)
+// Detects: Any failed MFA step following a correct password, sourced from
+//          outside the US. Broader companion to the mobile-push-specific
+//          rule — catches failures across all MFA method types, flagging
+//          attackers who've obtained valid passwords but can't clear the
+//          second factor from unfamiliar geography.
+// Entity mapping: Account → UPN → UserPrincipalName
+SigninLogs
+| where AuthenticationRequirement == "multiFactorAuthentication"
+| where Location != "US"
+| where tostring(Status) !contains "success"
+| where tostring(AuthenticationDetails) contains "Correct password"
+| extend AuthDetails = parse_json(AuthenticationDetails)
+| mv-expand AuthDetails
+| extend 
+    StepResult = tostring(AuthDetails.authenticationStepResultDetail),
+    StepSucceeded = tostring(AuthDetails.succeeded)
+| where StepSucceeded == "false"
+| where StepResult !has "requirement satisfied"

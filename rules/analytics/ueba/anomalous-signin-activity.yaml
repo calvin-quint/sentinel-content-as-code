@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/ueba/anomalous_signin_activity.kql
+id: 2a187a69-fbd9-4064-838b-0c285e04ebb8
+name: UEBA Anomalous Sign-in Activity
+description: UEBA Anomalous Sign-in Activity
+severity: Medium
+status: Available
+enabled: true
+queryFile: anomalous-signin-activity.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- InitialAccess
+relevantTechniques:
+- T1078.004
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: Name
+    columnName: Account_0_Name
+  - identifier: UPNSuffix
+    columnName: Account_0_UPNSuffix
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: SourceIPAddress

@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/admin-by-request/suspicious_or_weak_elevation_justification.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 311ac5e4-e701-42b0-8647-1ea661b9eb2e
+name: Admin By Request — Suspicious or Weak Elevation Justification
+description: 'Self-service admin elevation requests approved on a vague, boilerplate, or policy-bypass-flavored
+  justification ("test", "need admin", "bypass", "disable"), after excluding known-legitimate recurring
+  reasons (IDE/ docker/collab-tool installs and updates). Also flags short sessions justified only by
+  generic text when paired with risk signals: install source in Downloads/Temp, LOLBins in the elevated
+  app list (sc.exe, reg.exe, wscript.exe), or elevation windows of 4+ hours.'
+severity: Medium
+status: Available
+enabled: true
+queryFile: suspicious-or-weak-elevation-justification.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- PrivilegeEscalation
+relevantTechniques:
+- T1548
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: UPN
+    columnName: user_email_s
+- entityType: Host
+  fieldMappings:
+  - identifier: Name
+    columnName: computer_name_s

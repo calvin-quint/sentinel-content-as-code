@@ -1,0 +1,12 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/identity-governance/app_added_audit_lookup.kql
+// App Registration Added — Audit Lookup ($AppID lookup template)
+// MITRE ATT&CK: Persistence — Create Account: Cloud Account (T1136.003)
+// Detects: Parameterized lookup for the Entra ID audit event recording when
+//          a given application ($AppID) was registered. Used during
+//          investigation to pin down who created a suspicious app
+//          registration and when, ahead of a broader OAuth-abuse timeline.
+// Entity mapping: App → AppId → $AppID (substitute the value under investigation)
+AuditLogs
+| where OperationName == "Add application"
+| where TargetResources contains "$AppID"

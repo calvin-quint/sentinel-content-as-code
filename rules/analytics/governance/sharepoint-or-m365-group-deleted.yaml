@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/governance/sharepoint_or_m365_group_deleted.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: 451d4d5b-e07f-4d78-9d2f-71623b5f3f9f
+name: SharePoint Site or M365 Group Deleted
+description: Deletion of an M365 Group or a SharePoint site, merged from two sources (Entra group deletion
+  audit + SharePoint site-delete activity). Covers both a compromised/insider account destroying collaboration
+  data and accidental deletion needing fast recovery — 30-day soft-delete window applies to M365 Groups/SharePoint,
+  so early detection matters for restorability.
+severity: Medium
+status: Available
+enabled: true
+queryFile: sharepoint-or-m365-group-deleted.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Impact
+relevantTechniques:
+- T1485
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: UPN
+    columnName: DeletedBy

@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/1password/admin_account_recovery_initiated.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: c21fb0b2-0356-4fdd-9df0-78e7c71dc9e2
+name: 1Password Admin-Initiated Account Recovery
+description: An administrator initiating password/account recovery on behalf of another user. Legitimate
+  for offboarding/lockout support, but also the mechanism a compromised admin account or malicious insider
+  would use to seize control of a target's vault. Every event should be verified against an open helpdesk
+  ticket.
+severity: Medium
+status: Available
+enabled: true
+queryFile: admin-account-recovery-initiated.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Persistence
+- PrivilegeEscalation
+relevantTechniques:
+- T1098
+entityMappings:
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: source_ip

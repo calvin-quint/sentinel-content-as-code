@@ -1,0 +1,34 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/aitm-and-token-theft/url_click_followed_by_device_code_authentication.kql
+// URL Click Followed by Device Code Authentication
+// MITRE ATT&CK: Initial Access — Phishing: Spearphishing Link (T1566.002);
+//               Credential Access — Steal Application Access Token (T1528)
+// Detects: A Safe Links-tracked URL click by a user followed within 15
+//          minutes by that same user completing a device-code-flow sign-in
+//          — the exact sequence of a device-code phishing attack, where the
+//          clicked link leads to a lure instructing the victim to enter an
+//          attacker-generated device code, handing the attacker a live
+//          session token with no password or MFA prompt of their own.
+// Entity mapping: Account → UPN     → AccountUpn / UserPrincipalName
+//                 IP      → Address → IPAddress / SigninIP
+let WindowMinutes = 15;
+UrlClickEvents
+| where TimeGenerated > ago(20m)
+| project ClickTime = TimeGenerated,
+          AccountUpn, Url, NetworkMessageId, IPAddress
+| join kind=inner (
+    SigninLogs
+    | where TimeGenerated > ago(20m)
+    | where AuthenticationProtocol == "deviceCode"
+    | where ResultType == 0
+    | project SigninTime = TimeGenerated,
+              UserPrincipalName, SigninIP = IPAddress,
+              AppDisplayName, UniqueTokenIdentifier,
+              CorrelationId
+) on $left.AccountUpn == $right.UserPrincipalName
+| where SigninTime between (ClickTime .. (ClickTime + totimespan(strcat(tostring(WindowMinutes), "m"))))
+| project ClickTime, SigninTime, AccountUpn,
+          Url, NetworkMessageId,
+          SigninIP, AppDisplayName,
+          UniqueTokenIdentifier, CorrelationId
+| sort by ClickTime desc

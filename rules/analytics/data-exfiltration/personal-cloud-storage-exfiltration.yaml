@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/data-exfiltration/personal_cloud_storage_exfiltration.kql
+# NOTE: source had no explicit Severity/Frequency/Period header — defaulted to Medium/PT1H/PT1H, review before relying on it.
+id: f9127af4-e8db-4a44-b0b2-28c16a1a115f
+name: Personal Cloud Storage Exfiltration (production/current version)
+description: A file moving from an org-controlled domain (SharePoint/OneDrive/ M365) to an external target
+  domain, where DLP has already tagged the content with sensitive info types (SSN, credit card, medical,
+  credentials, etc.). Scores each hit Critical/High/Medium/Low by combining a known high-risk destination
+  list (Google Drive, Dropbox, Mega, file-sharing/paste sites, even github.com and claude.ai) with the
+  volume of sensitive-data matches. This is the final version of a six-iteration rule — see versions/
+  for the full progression from a simple domain check to this DLP-scored form.
+severity: Medium
+status: Available
+enabled: true
+queryFile: personal-cloud-storage-exfiltration.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Exfiltration
+relevantTechniques:
+- T1567.002
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: UPN
+    columnName: UserUPN
+- entityType: Host
+  fieldMappings:
+  - identifier: Name
+    columnName: DeviceName
+- entityType: IP
+  fieldMappings:
+  - identifier: Address
+    columnName: IPs

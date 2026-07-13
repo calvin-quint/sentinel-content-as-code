@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+# Imported from calvin-quint/docs: 01-detection-engineering/kql/ueba/anomalous_exchange_activity.kql
+id: 60be7602-2865-4a9b-8639-51254ac5c487
+name: UEBA Anomalous Exchange Activity
+description: UEBA Anomalous Exchange Activity
+severity: Medium
+status: Available
+enabled: true
+queryFile: anomalous-exchange-activity.kql
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+- Collection
+relevantTechniques:
+- T1114.003
+entityMappings:
+- entityType: Account
+  fieldMappings:
+  - identifier: FullName
+    columnName: UserPrincipalName
+  - identifier: Name
+    columnName: Account_0_Name
+  - identifier: UPNSuffix
+    columnName: Account_0_UPNSuffix

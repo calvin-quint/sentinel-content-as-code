@@ -1,0 +1,30 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/transport_rule_redirects.kql
+// Transport Rule BCC/Redirect Created or Modified
+// MITRE ATT&CK: Collection — Email Collection: Email Forwarding Rule (T1114.003)
+// Detects: Org-wide Exchange transport rule creation/modification that adds
+//          a BlindCopyTo or RedirectMessageTo action. Transport rules apply
+//          at the tenant mail-flow level rather than a single mailbox, so a
+//          malicious or compromised-admin rule here silently BCCs or
+//          redirects mail across many/all users at once — a far larger
+//          blast radius than a personal inbox rule and typically requires
+//          Exchange admin privileges to create.
+// Entity mapping: Account → Name/UPNSuffix → Account_0_Name/Account_0_UPNSuffix
+//                 IP      → Address        → IP_0_Address
+OfficeActivity
+  | where OfficeWorkload == "Exchange"
+  | where Operation in~ ("New-TransportRule", "Set-TransportRule")
+  | mv-apply DynamicParameters = todynamic(Parameters) on (summarize ParsedParameters = make_bag(pack(tostring(DynamicParameters.Name), DynamicParameters.Value)))
+  | extend RuleName = case(
+      Operation =~ "Set-TransportRule", OfficeObjectId,
+      Operation =~ "New-TransportRule", ParsedParameters.Name,
+      "Unknown")
+  | mv-expand ExpandedParameters = todynamic(Parameters)
+  | where ExpandedParameters.Name in~ ("BlindCopyTo", "RedirectMessageTo") and isnotempty(ExpandedParameters.Value)
+  | extend RedirectTo = ExpandedParameters.Value
+  | extend ClientIPValues = extract_all(@'\[?(::ffff:)?(?P<IPAddress>(\d+\.\d+\.\d+\.\d+)|[^\]]+)\]?([-:](?P<Port>\d+))?', dynamic(["IPAddress", "Port"]), ClientIP)[0]
+  | project TimeGenerated, RedirectTo, IPAddress = tostring(ClientIPValues[0]), Port = tostring(ClientIPValues[1]), UserId, Operation, RuleName, Parameters
+  | extend AccountName = tostring(split(UserId, "@")[0]), AccountUPNSuffix = tostring(split(UserId, "@")[1])
+  | extend Account_0_Name = AccountName
+  | extend Account_0_UPNSuffix = AccountUPNSuffix
+  | extend IP_0_Address = IPAddress

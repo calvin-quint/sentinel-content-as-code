@@ -1,0 +1,31 @@
+// Author: Calvin Quint
+// GitHub: https://github.com/calvin-quint/docs/blob/main/01-detection-engineering/kql/data-exfiltration/inbox_rule_changes_by_user_lookup.kql
+// Inbox Rule Changes by User ($UPN lookup template)
+// MITRE ATT&CK: Collection — Email Collection: Email Forwarding Rule (T1114.003)
+// Detects: Parameterized lookup of every inbox-rule create/modify event for
+//          a given user ($UPN). Used to pull a full rule-change timeline
+//          during an account-compromise investigation rather than to
+//          trigger on its own.
+// Entity mapping: Account → UPN → $UPN (substitute the value under investigation)
+OfficeActivity
+| where Operation contains "Inbox"
+| where UserId contains "$UPN"
+| extend RuleParameters = parse_json(Parameters)
+| extend
+    RuleName        = tostring(RuleParameters[0].Value),
+    ForwardTo       = tostring(RuleParameters[1].Value),
+    DeleteMessage   = tostring(RuleParameters[2].Value),
+    MoveToFolder    = tostring(RuleParameters[3].Value)
+| project
+    TimeGenerated,
+    UserId,
+    ClientIP,
+    Operation,
+    RuleName,
+    ForwardTo,
+    DeleteMessage,
+    MoveToFolder,
+    Parameters,
+    OfficeObjectId,
+    OrganizationName
+| order by TimeGenerated desc
