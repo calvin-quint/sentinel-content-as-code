@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/calvin-quint/sentinel-content-as-code/schemas/analytics-rule.schema.json",
+  "title": "Sentinel Scheduled Analytics Rule",
+  "description": "Schema for YAML-defined Microsoft Sentinel Scheduled analytics rules deployed by this repository.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "description",
+    "severity",
+    "query",
+    "queryFrequency",
+    "queryPeriod",
+    "triggerOperator",
+    "triggerThreshold"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable GUID for the rule. Generate once and never change it, or a new rule will be created instead of updating the existing one.",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name shown in Sentinel.",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["Scheduled"],
+      "default": "Scheduled",
+      "description": "Rule kind. Only Scheduled is currently supported by this pipeline."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["Informational", "Low", "Medium", "High"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["Available", "InPreview"],
+      "default": "Available",
+      "description": "Content lifecycle metadata only; not sent to the Sentinel API."
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "requiredDataConnectors": {
+      "type": "array",
+      "description": "Documentation-only metadata describing prerequisite data connectors/tables. Not sent to the Sentinel API.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connectorId": { "type": "string" },
+          "dataTypes": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "query": {
+      "type": "string",
+      "description": "KQL query body.",
+      "minLength": 1
+    },
+    "queryFrequency": {
+      "type": "string",
+      "description": "ISO 8601 duration, e.g. PT5H.",
+      "pattern": "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+S)?)?$"
+    },
+    "queryPeriod": {
+      "type": "string",
+      "description": "ISO 8601 duration, e.g. PT5H.",
+      "pattern": "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+S)?)?$"
+    },
+    "triggerOperator": {
+      "type": "string",
+      "enum": ["gt", "lt", "eq", "ne"]
+    },
+    "triggerThreshold": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "suppressionEnabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "suppressionDuration": {
+      "type": "string",
+      "description": "ISO 8601 duration, e.g. PT5H.",
+      "pattern": "^P(?!$)(\\d+Y)?(\\d+M)?(\\d+D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+S)?)?$"
+    },
+    "tactics": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "Reconnaissance",
+          "ResourceDevelopment",
+          "InitialAccess",
+          "Execution",
+          "Persistence",
+          "PrivilegeEscalation",
+          "DefenseEvasion",
+          "CredentialAccess",
+          "Discovery",
+          "LateralMovement",
+          "Collection",
+          "CommandAndControl",
+          "Exfiltration",
+          "Impact",
+          "ImpairProcessControl",
+          "InhibitResponseFunction"
+        ]
+      }
+    },
+    "relevantTechniques": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$"
+      }
+    },
+    "entityMappings": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entityType", "fieldMappings"],
+        "properties": {
+          "entityType": {
+            "type": "string",
+            "enum": [
+              "Account", "Host", "IP", "Malware", "File", "Process",
+              "CloudApplication", "DNS", "AzureResource", "FileHash",
+              "RegistryKey", "RegistryValue", "SecurityGroup", "URL",
+              "Mailbox", "MailCluster", "MailMessage", "SubmissionMail"
+            ]
+          },
+          "fieldMappings": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["identifier", "columnName"],
+              "properties": {
+                "identifier": { "type": "string" },
+                "columnName": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "incidentConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "createIncident": { "type": "boolean" },
+        "groupingConfiguration": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "reopenClosedIncident": { "type": "boolean" },
+            "lookbackDuration": { "type": "string" },
+            "matchingMethod": {
+              "type": "string",
+              "enum": ["AllEntities", "AnyAlert", "Selected"]
+            },
+            "groupByEntities": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "eventGroupingSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "aggregationKind": {
+          "type": "string",
+          "enum": ["SingleAlert", "AlertPerResult"]
+        }
+      }
+    },
+    "customDetails": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "alertDetailsOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "alertDisplayNameFormat": { "type": "string" },
+        "alertDescriptionFormat": { "type": "string" },
+        "alertSeverityColumnName": { "type": "string" },
+        "alertTacticsColumnName": { "type": "string" }
+      }
+    }
+  }
+}

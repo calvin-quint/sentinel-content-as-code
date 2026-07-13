@@ -1,0 +1,55 @@
+name: Deploy analytics rules
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rules/**"
+      - "schemas/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required for OIDC federated login (azure/login)
+  contents: read
+
+concurrency:
+  group: deploy-sentinel-rules
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Validate rule YAML against schema
+        working-directory: scripts
+        run: python validate_rules.py ../rules/analytics
+
+      # Requires a federated credential on the Azure AD App Registration
+      # for this repo/branch. See README.md for setup steps.
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy rules to Sentinel
+        working-directory: scripts
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_WORKSPACE_NAME: ${{ vars.AZURE_WORKSPACE_NAME }}
+        run: python deploy_rules.py ../rules/analytics
