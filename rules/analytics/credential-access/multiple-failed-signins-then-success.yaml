@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+id: 3d4e5f6a-7b8c-4d9e-a0b1-c2d3e4f5a6b7
+name: Multiple failed sign-ins followed by a success (possible password spray)
+description: |
+  Detects a user account with five or more failed Azure AD sign-ins
+  followed by a successful sign-in within a one hour window, a common
+  pattern for brute-force or password-spray attacks that succeed.
+severity: High
+status: Available
+enabled: true
+requiredDataConnectors:
+  - connectorId: AzureActiveDirectory
+    dataTypes:
+      - SigninLogs
+query: |
+  let failed = SigninLogs
+  | where ResultType != 0
+  | summarize FailedCount = count(), FailedIPs = make_set(IPAddress) by UserPrincipalName, bin(TimeGenerated, 1h);
+  let success = SigninLogs
+  | where ResultType == 0
+  | project SuccessTime = TimeGenerated, UserPrincipalName, SuccessIP = IPAddress, bin(TimeGenerated, 1h);
+  failed
+  | where FailedCount >= 5
+  | join kind=inner success on UserPrincipalName, TimeGenerated
+  | project TimeGenerated, UserPrincipalName, FailedCount, FailedIPs, SuccessTime, SuccessIP
+queryFrequency: PT1H
+queryPeriod: PT1H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+  - CredentialAccess
+relevantTechniques:
+  - T1110
+  - T1110.003
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: UserPrincipalName
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: SuccessIP
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT5H
+    matchingMethod: AllEntities
+eventGroupingSettings:
+  aggregationKind: SingleAlert

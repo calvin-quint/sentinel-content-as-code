@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+id: 8f0b1e2a-6c3d-4a1f-9b2e-1a2b3c4d5e6f
+name: Impossible travel sign-in for a single user
+description: |
+  Detects a successful Azure AD sign-in from a user occurring from two
+  geographically distant locations within a time window that is not
+  physically feasible, indicating possible credential compromise.
+severity: Medium
+status: Available
+enabled: true
+requiredDataConnectors:
+  - connectorId: AzureActiveDirectory
+    dataTypes:
+      - SigninLogs
+query: |
+  SigninLogs
+  | where ResultType == 0
+  | project TimeGenerated, UserPrincipalName, IPAddress, Location = tostring(LocationDetails.city), Latitude = todouble(LocationDetails.geoCoordinates.latitude), Longitude = todouble(LocationDetails.geoCoordinates.longitude)
+  | sort by UserPrincipalName, TimeGenerated asc
+  | serialize
+  | extend PrevTime = prev(TimeGenerated), PrevLat = prev(Latitude), PrevLon = prev(Longitude), PrevUser = prev(UserPrincipalName), PrevLocation = prev(Location)
+  | where UserPrincipalName == PrevUser
+  | extend TimeDeltaHours = datetime_diff('minute', TimeGenerated, PrevTime) / 60.0
+  | extend DistanceKm = geo_distance_2points(Longitude, Latitude, PrevLon, PrevLat) / 1000
+  | where TimeDeltaHours > 0 and TimeDeltaHours < 1 and DistanceKm > 800
+  | project TimeGenerated, UserPrincipalName, IPAddress, Location, PrevLocation, TimeDeltaHours, DistanceKm
+queryFrequency: PT1H
+queryPeriod: PT2H
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+  - InitialAccess
+relevantTechniques:
+  - T1078
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: UserPrincipalName
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: IPAddress
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT5H
+    matchingMethod: AllEntities
+eventGroupingSettings:
+  aggregationKind: SingleAlert

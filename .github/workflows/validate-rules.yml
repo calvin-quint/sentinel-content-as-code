@@ -1,0 +1,32 @@
+name: Validate analytics rules
+
+on:
+  pull_request:
+    paths:
+      - "rules/**"
+      - "schemas/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Validate rule YAML against schema
+        working-directory: scripts
+        run: python validate_rules.py ../rules/analytics
+
+      - name: Dry-run deployment payloads
+        working-directory: scripts
+        run: python deploy_rules.py ../rules/analytics --dry-run
