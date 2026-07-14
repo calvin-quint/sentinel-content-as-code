@@ -1,0 +1,44 @@
+// Title: Data Encrypted for Impact - Ransomware File Activity Indicator
+// MITRE ATT&CK: Impact - Data Encrypted for Impact (T1486)
+// Detects: The classic ransomware encryption fingerprint - a burst of file renames on
+//          a single device converging on one new, uncommon extension within a short
+//          window - correlated against a ransom-note file (readme/decrypt-instructions
+//          style filename) dropped on the same device around the same time. Either
+//          signal alone is common noise (archivers, batch converters, AV quarantine);
+//          the pairing is what makes this high-fidelity.
+// Entity mapping: Host → Name → DeviceName
+//                 File → Name → NoteFileName
+
+let lookback = 1d;
+let renameWindow = 10m;
+// common benign transient extensions that show up in normal rename bursts - exclude these
+let benignExtensions = dynamic(["tmp", "crdownload", "partial", "download", "part"]);
+let RenameBursts =
+    DeviceFileEvents
+    | where Timestamp > ago(lookback)
+    | where ActionType == "FileRenamed"
+    | where isnotempty(FileName)
+    | extend NewExt = tolower(tostring(split(FileName, ".")[-1]))
+    | where NewExt !in (benignExtensions)
+    | summarize RenameCount = count(), FoldersTouched = dcount(FolderPath)
+        by DeviceName, NewExt, bin(Timestamp, renameWindow)
+    | where RenameCount >= 50  // tune to the environment's typical background rename rate
+    ;
+let RansomNoteDrops =
+    DeviceFileEvents
+    | where Timestamp > ago(lookback)
+    | where ActionType == "FileCreated"
+    | where FileName matches regex @"(?i)(readme|decrypt|how.?to.?(decrypt|recover)|restore.?files|help.?decrypt).*\.(txt|html|hta)$"
+    | project DeviceName, NoteTimestamp = Timestamp, NoteFileName = FileName, FolderPath;
+
+RenameBursts
+| join kind=inner (RansomNoteDrops) on DeviceName
+| where NoteTimestamp between (Timestamp .. (Timestamp + renameWindow))
+| project Timestamp, DeviceName, NewExt, RenameCount, FoldersTouched, NoteFileName, FolderPath
+| order by Timestamp desc
+
+// --- Fallback: rename burst alone with no ransom-note correlation captured in-window
+// (some strains skip the note, or drop it after the burst completes) - higher noise,
+// raise RenameCount threshold if enabling standalone ---
+//
+// RenameBursts | order by Timestamp desc

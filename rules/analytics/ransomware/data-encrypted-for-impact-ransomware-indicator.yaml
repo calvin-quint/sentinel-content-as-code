@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+id: c3a10807-c2b5-4598-98bc-8a49529531ae
+name: Data Encrypted for Impact - Ransomware File Activity Indicator
+description: |
+  Detects the classic ransomware encryption fingerprint - a burst of file renames on a
+  single device converging on one new, uncommon extension within a short window -
+  correlated against a ransom-note file (readme/decrypt-instructions style filename)
+  dropped on the same device around the same time. Either signal alone is common noise
+  (archivers, batch converters, AV quarantine); the pairing is what makes this
+  high-fidelity.
+
+  False positives: bulk archive extraction/re-encoding jobs (media transcoding
+  pipelines), backup software restructuring file extensions, AV quarantine renaming
+  (.vir/.quarantine). Exclude known batch-processing service accounts and quarantine
+  folders, and tune the RenameCount threshold to the environment's background rename
+  rate.
+severity: High
+status: Available
+enabled: true
+queryFile: data-encrypted-for-impact-ransomware-indicator.kql
+queryFrequency: PT1H
+queryPeriod: P1D
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+  - Impact
+relevantTechniques:
+  - T1486
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: Name
+        columnName: DeviceName
+  - entityType: File
+    fieldMappings:
+      - identifier: Name
+        columnName: NoteFileName
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT5H
+    matchingMethod: AllEntities
+eventGroupingSettings:
+  aggregationKind: SingleAlert

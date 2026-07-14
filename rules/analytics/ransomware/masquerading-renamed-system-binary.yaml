@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+id: 383706f3-ce8d-4d3b-88f1-a0b1e35cacf6
+name: Masquerading - Renamed System Binary Execution
+description: |
+  Detects a process using a well-known Windows system binary filename (svchost.exe,
+  lsass.exe, csrss.exe, etc.) but launched from outside its legitimate install
+  directory, or whose embedded version-info original filename doesn't match the
+  on-disk filename - a common technique to blend in with normal system activity and
+  slip past naive name-based allowlists.
+
+  False positives: rare cases of legitimate third-party software bundling a binary
+  literally named the same as a system process, or lab/test machines intentionally
+  running these binaries from copied directories. Maintain an allowlist of known
+  non-standard-but-approved paths (e.g., WDAC/AppLocker staging folders) if noisy.
+severity: High
+status: Available
+enabled: true
+queryFile: masquerading-renamed-system-binary.kql
+queryFrequency: PT1H
+queryPeriod: P1D
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+  - DefenseEvasion
+relevantTechniques:
+  - T1036
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: Name
+        columnName: DeviceName
+  - entityType: Account
+    fieldMappings:
+      - identifier: Name
+        columnName: AccountName
+  - entityType: File
+    fieldMappings:
+      - identifier: Name
+        columnName: FileName
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT5H
+    matchingMethod: AllEntities
+eventGroupingSettings:
+  aggregationKind: SingleAlert

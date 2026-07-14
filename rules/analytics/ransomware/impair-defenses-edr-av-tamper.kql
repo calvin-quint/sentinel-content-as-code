@@ -1,0 +1,47 @@
+// Title: Impair Defenses - EDR/AV Tamper Attempt
+// MITRE ATT&CK: Defense Evasion - Impair Defenses: Disable or Modify Tools (T1562.001)
+// Detects: Attempts to disable, stop, or weaken Microsoft Defender/EDR protections -
+//          service stops, PowerShell cmdlets disabling real-time protection or adding
+//          broad scan exclusions, and registry writes to the Defender tamper-protection
+//          and policy keys. This directly threatens the detection pipeline itself, so
+//          treat any hit as high priority regardless of what else is happening on the
+//          host.
+// Entity mapping: Host    → Name → DeviceName
+//                 Account → Name → AccountName
+
+let lookback = 1d;
+let tamperCmdPatterns = dynamic([
+    "set-mppreference -disablerealtimemonitoring", "set-mppreference -disableioavprotection",
+    "set-mppreference -disablebehaviormonitoring", "set-mppreference -disablescriptscanning",
+    "add-mppreference -exclusionpath", "add-mppreference -exclusionprocess", "add-mppreference -exclusionextension",
+    "sc stop windefend", "sc.exe stop windefend", "sc config windefend start= disabled", "sc.exe config windefend start= disabled",
+    "net stop windefend", "net.exe stop windefend",
+    "taskkill /im msmpeng.exe", "taskkill /f /im msmpeng.exe", "taskkill.exe /im msmpeng.exe"
+]);
+let TamperProcesses =
+    DeviceProcessEvents
+    | where Timestamp > ago(lookback)
+    | where FileName in~ ("powershell.exe", "pwsh.exe", "cmd.exe", "sc.exe", "net.exe", "taskkill.exe")
+    | where ProcessCommandLine has_any (tamperCmdPatterns)
+    | project DeviceId, DeviceName, Timestamp, AccountName, FileName, ProcessCommandLine,
+              InitiatingProcessFileName, ReportId, Vector = "ProcessCommand";
+
+let tamperRegistryPaths = dynamic([
+    @"Software\Policies\Microsoft\Windows Defender\DisableAntiSpyware",
+    @"Software\Policies\Microsoft\Windows Defender\Real-Time Protection\DisableRealtimeMonitoring",
+    @"Software\Microsoft\Windows Defender\Features\TamperProtection",
+    @"Software\Policies\Microsoft\Windows Defender\Exclusions"
+]);
+let TamperRegistry =
+    DeviceRegistryEvents
+    | where Timestamp > ago(lookback)
+    | where ActionType in ("RegistryValueSet", "RegistryKeyCreated")
+    | where RegistryKey has_any (tamperRegistryPaths)
+    | project DeviceId, DeviceName, Timestamp, AccountName, RegistryKey, RegistryValueData,
+              InitiatingProcessFileName, ReportId, Vector = "RegistryTamper";
+
+TamperProcesses
+| union TamperRegistry
+| summarize FirstSeen = min(Timestamp), Vectors = make_set(Vector), HitCount = count()
+    by DeviceName, AccountName
+| order by FirstSeen desc
