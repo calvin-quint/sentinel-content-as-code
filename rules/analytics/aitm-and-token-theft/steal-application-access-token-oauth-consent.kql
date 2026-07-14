@@ -1,0 +1,67 @@
+// Title: Steal Application Access Token - OAuth Consent Phishing
+// MITRE ATT&CK: Credential Access - Steal Application Access Token (T1528)
+// Detects: The "illicit consent grant" attack - a user is phished into granting a
+//          malicious (or malicious-looking) OAuth app permissions to their
+//          mailbox/files/directory without any password ever being stolen. The app
+//          then holds a standing token and doesn't need to re-authenticate, making
+//          this persistent and MFA-bypassing by design. Three-part detection: (1)
+//          user consent grants requesting high-risk scopes, (2) apps with red-flag
+//          registration characteristics (unverified publisher, multi-tenant, newly
+//          created), and (3) correlated risk scoring based on app age at consent.
+// Entity mapping: Account         → UPN  → GrantedBy
+//                 CloudApplication → Name → AppDisplayName
+
+let lookback = 1d;
+let highRiskScopes = dynamic([
+    "Mail.Read", "Mail.ReadWrite", "Mail.Send", "MailboxSettings.ReadWrite",
+    "Files.Read.All", "Files.ReadWrite.All", "Sites.Read.All", "Sites.ReadWrite.All",
+    "Directory.Read.All", "Directory.ReadWrite.All", "User.Read.All", "User.ReadWrite.All",
+    "offline_access", "full_access_as_app", "Contacts.Read", "Contacts.ReadWrite"
+]);
+
+// Part 1: User (not admin) consent grants requesting at least one high-risk scope
+let RiskyConsentGrants =
+    AuditLogs
+    | where TimeGenerated > ago(lookback)
+    | where OperationName in ("Consent to application", "Add OAuth2PermissionGrant", "Add app role assignment to service principal")
+    | extend AppDisplayName = tostring(TargetResources[0].displayName)
+    | extend ConsentType = tostring(parse_json(tostring(AdditionalDetails))[0].value) // "AllPrincipals" = admin consent, null/user = user consent
+    | extend Scopes = tostring(TargetResources[0].modifiedProperties)
+    | where Scopes has_any (highRiskScopes)
+    | extend GrantedBy = tostring(InitiatedBy.user.userPrincipalName)
+    | project TimeGenerated, AppDisplayName, ConsentType, Scopes, GrantedBy,
+              CorrelationId, Result;
+
+// Part 2: Red-flag app registration characteristics — newly created app, no verified publisher
+// (requires querying the Applications/ServicePrincipal audit trail for creation events)
+let NewUnverifiedApps =
+    AuditLogs
+    | where TimeGenerated > ago(7d)  // wider window — app may have been registered days before the phish lands
+    | where OperationName == "Add service principal"
+    | extend AppDisplayName = tostring(TargetResources[0].displayName)
+    | extend AppId = tostring(TargetResources[0].id)
+    | project AppCreatedTime = TimeGenerated, AppDisplayName, AppId;
+
+// Part 3: Correlate — risky consent grant to an app created in the recent past (freshly minted
+// apps requesting broad scopes immediately after registration is the highest-fidelity combo)
+RiskyConsentGrants
+| join kind=leftouter (NewUnverifiedApps) on AppDisplayName
+| extend AppAgeAtConsent = TimeGenerated - AppCreatedTime
+| extend RiskLevel = case(
+    isnotempty(AppCreatedTime) and AppAgeAtConsent < 3d, "Critical - new app + high-risk consent",
+    ConsentType == "AllPrincipals", "High - tenant-wide admin consent to high-risk scopes",
+    "Medium - user consent to high-risk scopes, app age unknown"
+)
+| project TimeGenerated, AppDisplayName, GrantedBy, ConsentType, Scopes, AppCreatedTime, RiskLevel, CorrelationId
+| order by TimeGenerated desc
+
+// --- Part 4: Post-consent activity — sign-ins using the app's token shortly after consent.
+// Run separately and join on AppDisplayName/AppId + time window if you want full attack-chain
+// visibility (consent -> first malicious use) ---
+//
+// SignInLogs
+// | where TimeGenerated > ago(1d)
+// | where AppDisplayName in ((RiskyConsentGrants | distinct AppDisplayName))
+// | where ResourceDisplayName in ("Microsoft Graph", "Office 365 Exchange Online", "SharePoint Online")
+// | project TimeGenerated, UserPrincipalName, AppDisplayName, IPAddress, Location, ResourceDisplayName
+// | order by TimeGenerated desc

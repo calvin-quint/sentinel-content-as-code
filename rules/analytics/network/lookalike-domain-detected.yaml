@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+id: 28c1fde4-e98b-4fc3-9b33-c02581d31b84
+name: Lookalike / Typosquat Domain Detected
+description: |
+  Flags domains queried by the environment that closely resemble a maintained
+  watchlist of brand/vendor domains - classic typosquat/lookalike patterns: character
+  insertion, hyphenation, or a numeric suffix/prefix around the brand name. KQL has no
+  native edit-distance function, so this uses substring containment + hyphen/suffix
+  regex patterns instead of true Levenshtein distance - good enough to catch the
+  common cases without a plugin.
+
+  Data source: ASIM DNS normalization (_Im_Dns) - source-agnostic, works against
+  Cloudflare Gateway logs, Windows DNS analytics, or any connector mapped to the ASIM
+  DNS schema. Swap _Im_Dns for the actual table (e.g. CommonSecurityLog,
+  DeviceNetworkEvents) if ASIM parsers aren't deployed in the workspace.
+
+  Watchlist required: "BrandDomains" - one column DomainName, seeded with the
+  legitimate corporate/vendor domains to protect (e.g., contoso.com,
+  microsoft.com, myqnet.atlassian.net root domains, etc.)
+
+  False positives: internal subdomains of the protected brand domains will self-match -
+  exclude the actual root domains from the comparison set below.
+
+  Companion rule: see newly-registered-domain-first-seen.yaml for the first-seen/NRD
+  detection that was originally the first half of this hunting query - split out
+  because a Sentinel scheduled rule can only emit one query result and the two
+  detections use unrelated logic and severities.
+severity: High
+status: Available
+enabled: true
+queryFile: lookalike-domain-detected.kql
+queryFrequency: PT1H
+queryPeriod: P1D
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+  - ResourceDevelopment
+relevantTechniques:
+  - T1583.001
+  - T1584.001
+entityMappings:
+  - entityType: DNS
+    fieldMappings:
+      - identifier: DomainName
+        columnName: DnsQuery
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT5H
+    matchingMethod: AllEntities
+eventGroupingSettings:
+  aggregationKind: SingleAlert
