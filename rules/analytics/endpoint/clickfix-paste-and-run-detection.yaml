@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+id: 1383fc8e-605e-402a-985c-7d89fd9059f8
+name: ClickFix / Paste-and-Run Detection
+description: |
+  Detects the ClickFix social engineering pattern - a user is lured by a fake
+  CAPTCHA/"verify you are human" page into pressing Win+R (or opening a terminal) and
+  pasting an attacker-supplied command, which explorer.exe then spawns via cmd.exe,
+  powershell.exe, or mshta.exe. Correlates a Run-dialog (RunMRU) registry write with a
+  suspicious child process launch from explorer.exe within a short window for higher
+  fidelity than command-line matching alone.
+
+  False positives: IT staff quick-launching tools via Run dialog (mmc, services.msc,
+  etc.) - tune the FileName allowlist and command-line exclusions below for admin
+  workflows.
+severity: High
+status: Available
+enabled: true
+queryFile: clickfix-paste-and-run-detection.kql
+queryFrequency: PT1H
+queryPeriod: P1D
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+  - Execution
+relevantTechniques:
+  - T1204.004
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: Name
+        columnName: DeviceName
+  - entityType: Account
+    fieldMappings:
+      - identifier: Name
+        columnName: AccountName
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT5H
+    matchingMethod: AllEntities
+eventGroupingSettings:
+  aggregationKind: SingleAlert

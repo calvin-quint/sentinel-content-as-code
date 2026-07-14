@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=../../../schemas/analytics-rule.schema.json
+id: 2307a1de-4819-4bb8-837c-f377ac7ff089
+name: Reflective Code Loading / Fileless In-Memory Execution Detection
+description: |
+  Detects code downloaded and executed directly in memory without ever being written
+  to disk - the classic "download cradle" pattern (IEX + DownloadString,
+  Reflection.Assembly Load, Add-Type from remote byte array). Combines AMSI-based
+  content detection with command-line pattern matching, then correlates against
+  DeviceFileEvents to confirm no corresponding executable/script file was written -
+  the absence of a file write is the actual fingerprint of this technique, not any
+  single indicator alone.
+
+  Also ties to T1055 Process Injection, T1059.001 PowerShell, and T1027.011 Fileless
+  Storage.
+
+  False positives: legitimate DevOps/automation scripts using in-memory module loading
+  (e.g., PowerShell Gallery module imports, some Chocolatey/Scoop installers). Baseline
+  admin scripting patterns and exclude known-good signed script hashes.
+severity: High
+status: Available
+enabled: true
+queryFile: reflective-code-loading-memory-only-module.kql
+queryFrequency: PT1H
+queryPeriod: P1D
+triggerOperator: gt
+triggerThreshold: 0
+suppressionEnabled: false
+suppressionDuration: PT5H
+tactics:
+  - DefenseEvasion
+  - Execution
+  - PrivilegeEscalation
+relevantTechniques:
+  - T1620
+  - T1055
+  - T1059.001
+  - T1027.011
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: Name
+        columnName: DeviceName
+  - entityType: Account
+    fieldMappings:
+      - identifier: Name
+        columnName: AccountName
+  - entityType: URL
+    fieldMappings:
+      - identifier: Url
+        columnName: RemoteUrl
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT5H
+    matchingMethod: AllEntities
+eventGroupingSettings:
+  aggregationKind: SingleAlert

@@ -1,0 +1,30 @@
+// Title: Newly Registered / First-Seen Domain Detection
+// MITRE ATT&CK: Resource Development - Acquire/Compromise Infrastructure: Domains
+//               (T1583.001 / T1584.001)
+// Detects: Domains queried by the environment that have no query history in the
+//          prior 30-day baseline window - a practical proxy for "newly
+//          registered/newly seen" without requiring a WHOIS/RDAP feed. Pair with
+//          Microsoft Defender TI or a commercial NRD feed via
+//          ThreatIntelligenceIndicator if available for true registration-date
+//          fidelity.
+// Data source: ASIM DNS normalization (_Im_Dns) - source-agnostic, works against
+//              Cloudflare Gateway logs, Windows DNS analytics, or any connector
+//              mapped to the ASIM DNS schema. Swap _Im_Dns for the actual table
+//              (e.g. CommonSecurityLog, DeviceNetworkEvents) if ASIM parsers
+//              aren't deployed in the workspace.
+// Entity mapping: DNS → DomainName → DnsQuery
+
+let baselineWindow = 30d;
+let detectionWindow = 1d;
+let baselineDomains =
+    _Im_Dns(starttime = ago(baselineWindow + detectionWindow), endtime = ago(detectionWindow))
+    | distinct DnsQuery;
+_Im_Dns(starttime = ago(detectionWindow), endtime = now())
+| where DnsQuery !in (baselineDomains)
+| where isnotempty(DnsQuery)
+| summarize FirstSeen = min(TimeGenerated), QueryCount = count(),
+            Devices = make_set(SrcIpAddr, 10)
+    by DnsQuery
+| where QueryCount < 5  // low-volume first contact is more suspicious than a bulk CDN rollout
+| project FirstSeen, DnsQuery, QueryCount, Devices
+| order by FirstSeen desc
