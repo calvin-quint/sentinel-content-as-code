@@ -1,0 +1,31 @@
+// Title: Inhibit System Recovery - Shadow Copy / Backup Deletion (Ransomware Precursor)
+// MITRE ATT&CK: Impact - Inhibit System Recovery (T1490)
+// Detects: Command-line invocations that delete or disable Windows shadow copies,
+//          backups, and recovery options - the near-universal precursor step before
+//          ransomware detonation, executed to prevent victim restoration. Matches
+//          vssadmin/wmic shadow-copy deletion, wbadmin catalog/backup deletion,
+//          bcdedit recovery-disabling flags, and PowerShell WMI/CIM shadow-copy
+//          removal.
+// Entity mapping: Host    → Name        → DeviceName
+//                 Account → Name        → AccountName
+//                 Process → CommandLine → ProcessCommandLine
+
+let lookback = 1d;
+let recoveryTamperPatterns = dynamic([
+    "vssadmin delete shadows", "vssadmin.exe delete shadows", "vssadmin resize shadowstorage",
+    "wmic shadowcopy delete", "wmic.exe shadowcopy delete",
+    "wbadmin delete catalog", "wbadmin.exe delete catalog", "wbadmin delete backup", "wbadmin delete systemstatebackup",
+    "bcdedit /set", "bcdedit.exe /set",   // followed by recoveryenabled no / bootstatuspolicy ignoreallfailures - narrowed below
+    "get-wmiobject win32_shadowcopy", "get-ciminstance win32_shadowcopy", "remove-wmiobject", "remove-ciminstance"
+]);
+let bcdeditRecoveryFlags = dynamic(["recoveryenabled no", "bootstatuspolicy ignoreallfailures"]);
+
+DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| where FileName in~ ("vssadmin.exe", "wmic.exe", "wbadmin.exe", "bcdedit.exe", "powershell.exe", "pwsh.exe")
+| where ProcessCommandLine has_any (recoveryTamperPatterns)
+// narrow bcdedit hits to the two flags that actually disable recovery, to avoid catching unrelated bcdedit usage
+| where FileName !~ "bcdedit.exe" or ProcessCommandLine has_any (bcdeditRecoveryFlags)
+| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine,
+          InitiatingProcessFileName, InitiatingProcessAccountName, ReportId
+| order by Timestamp desc
