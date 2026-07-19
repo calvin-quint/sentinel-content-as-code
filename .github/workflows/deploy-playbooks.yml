@@ -1,0 +1,101 @@
+name: Deploy Playbooks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'playbooks/**/definition.json'
+      - 'automations/**/definition.json'
+  workflow_dispatch:
+    inputs:
+      playbook_path:
+        description: 'Path to deploy (e.g. playbooks/children/C1-Enrich-IP/definition.json or automations/A1-Notify-SD-UserDisabled/definition.json). Leave empty to deploy all changed.'
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Detect playbooks to deploy
+        id: changed
+        run: |
+          if [ -n "${{ inputs.playbook_path }}" ]; then
+            FILES="${{ inputs.playbook_path }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            FILES=$(find playbooks automations -name 'definition.json' 2>/dev/null | sort | tr '\n' ' ')
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              FILES=$(find playbooks automations -name 'definition.json' 2>/dev/null | sort | tr '\n' ' ')
+            else
+              FILES=$(git diff --name-only "$BEFORE" "${{ github.sha }}" | grep -E '(playbooks|automations)/.*/definition\.json' | tr '\n' ' ')
+            fi
+          fi
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          if [ -n "$FILES" ]; then
+            echo "Playbooks to deploy:"
+            for f in $FILES; do echo "  $f"; done
+          else
+            echo "No playbook changes detected."
+          fi
+
+      - name: Validate JSON syntax
+        if: steps.changed.outputs.files != ''
+        run: |
+          FAIL=0
+          for f in ${{ steps.changed.outputs.files }}; do
+            if ! python3 -m json.tool "$f" > /dev/null 2>&1; then
+              echo "ERROR: Invalid JSON in $f"
+              FAIL=1
+            else
+              echo "OK: $f"
+            fi
+          done
+          exit $FAIL
+
+      - name: Deploy playbooks
+        if: steps.changed.outputs.files != ''
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          RESOURCE_GROUP: ${{ vars.SENTINEL_RESOURCE_GROUP }}
+          WORKSPACE_NAME: ${{ vars.SENTINEL_WORKSPACE_NAME }}
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+          PLAYBOOK_NAME_PREFIX: ${{ vars.PLAYBOOK_NAME_PREFIX }}
+          TENANT_DOMAIN: ${{ vars.TENANT_DOMAIN }}
+          SYNC_APP_NAME: ${{ vars.SYNC_APP_NAME }}
+          AUTOMATION_SENDER_UPN: ${{ secrets.AUTOMATION_SENDER_UPN }}
+          SERVICEDESK_EMAIL: ${{ secrets.SERVICEDESK_EMAIL }}
+          C1_TRIGGER_URL: ${{ secrets.C1_TRIGGER_URL }}
+          C2_TRIGGER_URL: ${{ secrets.C2_TRIGGER_URL }}
+          C3_TRIGGER_URL: ${{ secrets.C3_TRIGGER_URL }}
+          C4_TRIGGER_URL: ${{ secrets.C4_TRIGGER_URL }}
+          C5_TRIGGER_URL: ${{ secrets.C5_TRIGGER_URL }}
+          C6_TRIGGER_URL: ${{ secrets.C6_TRIGGER_URL }}
+          C7_TRIGGER_URL: ${{ secrets.C7_TRIGGER_URL }}
+          C10_TRIGGER_URL: ${{ secrets.C10_TRIGGER_URL }}
+        run: |
+          FAIL=0
+          for f in ${{ steps.changed.outputs.files }}; do
+            echo "--- Deploying $f ---"
+            if ! python3 scripts/deploy-playbook.py "$f"; then
+              echo "FAILED: $f"
+              FAIL=1
+            fi
+          done
+          exit $FAIL

@@ -1,0 +1,3 @@
+SearchKey,Description,Category,AddedBy,AddedDate
+10.0.0.0/8,Corporate internal network,CorporateNAT,admin,2026-01-01
+192.168.0.0/16,VPN egress range,VPN,admin,2026-01-01

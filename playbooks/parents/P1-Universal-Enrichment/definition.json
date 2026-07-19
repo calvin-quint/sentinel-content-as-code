@@ -1,0 +1,372 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "Microsoft_Sentinel_incident": {
+                "type": "ApiConnectionWebhook",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "body": { "callback_url": "@{listCallbackUrl()}" },
+                    "path": "/incident-creation"
+                }
+            }
+        },
+        "actions": {
+            "Initialize_IPResults": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "IPResults", "type": "array", "value": [] }] }
+            },
+            "Initialize_UserResults": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "UserResults", "type": "array", "value": [] }] }
+            },
+            "Initialize_HasHighRiskIP": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "HasHighRiskIP", "type": "boolean", "value": false }] }
+            },
+            "Initialize_HasHighRiskUser": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "HasHighRiskUser", "type": "boolean", "value": false }] }
+            },
+            "Initialize_IPSummary": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "IPSummary", "type": "string", "value": "" }] }
+            },
+            "Initialize_UserSummary": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "UserSummary", "type": "string", "value": "" }] }
+            },
+            "Entities_Get_IPs": {
+                "runAfter": {
+                    "Initialize_IPResults": ["Succeeded"],
+                    "Initialize_HasHighRiskIP": ["Succeeded"],
+                    "Initialize_IPSummary": ["Succeeded"]
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "method": "post",
+                    "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                    "path": "/entities/ip"
+                }
+            },
+            "Entities_Get_Accounts": {
+                "runAfter": {
+                    "Initialize_UserResults": ["Succeeded"],
+                    "Initialize_HasHighRiskUser": ["Succeeded"],
+                    "Initialize_UserSummary": ["Succeeded"]
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "method": "post",
+                    "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                    "path": "/entities/account"
+                }
+            },
+            "For_each_IP": {
+                "runAfter": { "Entities_Get_IPs": ["Succeeded"] },
+                "type": "Foreach",
+                "operationOptions": "Sequential",
+                "foreach": "@body('Entities_Get_IPs')?['IPs']",
+                "actions": {
+                    "Call_C1_Enrich_IP": {
+                        "runAfter": {},
+                        "type": "Http",
+                        "inputs": {
+                            "uri": "__C1_TRIGGER_URL__",
+                            "method": "POST",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "ipAddress": "@{items('For_each_IP')['address']}",
+                                "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                            }
+                        }
+                    },
+                    "Parse_C1_Response": {
+                        "runAfter": { "Call_C1_Enrich_IP": ["Succeeded", "Failed"] },
+                        "type": "ParseJson",
+                        "inputs": {
+                            "content": "@body('Call_C1_Enrich_IP')",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "IPAddress": { "type": "string" },
+                                    "Country": { "type": "string" },
+                                    "CountryCode": { "type": "string" },
+                                    "City": { "type": "string" },
+                                    "ISP": { "type": "string" },
+                                    "ASN": { "type": "string" },
+                                    "IsHostingProvider": { "type": "boolean" },
+                                    "IsProxy": { "type": "boolean" },
+                                    "IsTor": { "type": "boolean" },
+                                    "AbuseConfidenceScore": { "type": "integer" },
+                                    "TotalReports": { "type": "integer" },
+                                    "TIHit": { "type": "boolean" },
+                                    "TIPulse": { "type": ["string", "null"] },
+                                    "TIConfidence": { "type": ["integer", "null"] },
+                                    "IsTrusted": { "type": "boolean" },
+                                    "RiskTier": { "type": "string" }
+                                }
+                            }
+                        }
+                    },
+                    "If_IP_High_Risk": {
+                        "runAfter": { "Parse_C1_Response": ["Succeeded", "Failed"] },
+                        "type": "If",
+                        "expression": { "equals": ["@coalesce(body('Parse_C1_Response')?['RiskTier'], 'Low')", "High"] },
+                        "actions": {
+                            "Set_HasHighRiskIP": {
+                                "type": "SetVariable",
+                                "inputs": { "name": "HasHighRiskIP", "value": true }
+                            }
+                        },
+                        "else": { "actions": {} }
+                    },
+                    "Append_IP_Result": {
+                        "runAfter": { "If_IP_High_Risk": ["Succeeded"] },
+                        "type": "AppendToArrayVariable",
+                        "inputs": { "name": "IPResults", "value": "@body('Parse_C1_Response')" }
+                    },
+                    "Append_IPSummary": {
+                        "runAfter": { "Append_IP_Result": ["Succeeded"] },
+                        "type": "AppendToStringVariable",
+                        "inputs": {
+                            "name": "IPSummary",
+                            "value": "@{concat('<b>IP:</b> ', coalesce(body('Parse_C1_Response')?['IPAddress'], items('For_each_IP')['address']), ' | ', coalesce(body('Parse_C1_Response')?['City'], ''), ', ', coalesce(body('Parse_C1_Response')?['CountryCode'], ''), ' | ISP: ', coalesce(body('Parse_C1_Response')?['ISP'], 'Unknown'), '<br><b>Risk:</b> ', coalesce(body('Parse_C1_Response')?['RiskTier'], 'Unknown'), ' | Abuse: ', coalesce(body('Parse_C1_Response')?['AbuseConfidenceScore'], 0), '% | TI: ', coalesce(body('Parse_C1_Response')?['TIHit'], false), ' | Trusted: ', coalesce(body('Parse_C1_Response')?['IsTrusted'], false), '<br><br>')}"
+                        }
+                    }
+                }
+            },
+            "For_each_Account": {
+                "runAfter": { "Entities_Get_Accounts": ["Succeeded"] },
+                "type": "Foreach",
+                "operationOptions": "Sequential",
+                "foreach": "@body('Entities_Get_Accounts')?['Accounts']",
+                "actions": {
+                    "Call_C4_Enrich_User": {
+                        "runAfter": {},
+                        "type": "Http",
+                        "inputs": {
+                            "uri": "__C4_TRIGGER_URL__",
+                            "method": "POST",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "UserPrincipalName": "@{concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__')}",
+                                "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                            }
+                        }
+                    },
+                    "Parse_C4_Response": {
+                        "runAfter": { "Call_C4_Enrich_User": ["Succeeded", "Failed"] },
+                        "type": "ParseJson",
+                        "inputs": {
+                            "content": "@body('Call_C4_Enrich_User')",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "UserPrincipalName": { "type": "string" },
+                                    "DisplayName": { "type": "string" },
+                                    "Department": { "type": "string" },
+                                    "EntraRiskLevel": { "type": "string" },
+                                    "EntraRiskState": { "type": "string" },
+                                    "LastSignInLocation": { "type": "string" },
+                                    "DistinctCountries90d": { "type": "integer" },
+                                    "InvestigationPriority": { "type": "integer" },
+                                    "IsServiceAccount": { "type": "boolean" },
+                                    "IsPrivilegedAccount": { "type": "boolean" },
+                                    "DaysSinceLastSignIn": { "type": "integer" },
+                                    "IsDormant": { "type": "boolean" },
+                                    "EscalateToSOC": { "type": "boolean" },
+                                    "EarlyExit": { "type": "boolean" }
+                                }
+                            }
+                        }
+                    },
+                    "If_User_High_Risk": {
+                        "runAfter": { "Parse_C4_Response": ["Succeeded", "Failed"] },
+                        "type": "If",
+                        "expression": {
+                            "or": [
+                                { "equals": ["@coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none')", "high"] },
+                                { "equals": ["@coalesce(body('Parse_C4_Response')?['EscalateToSOC'], false)", true] },
+                                { "greater": ["@coalesce(body('Parse_C4_Response')?['InvestigationPriority'], 0)", 6] }
+                            ]
+                        },
+                        "actions": {
+                            "Set_HasHighRiskUser": {
+                                "runAfter": {},
+                                "type": "SetVariable",
+                                "inputs": { "name": "HasHighRiskUser", "value": true }
+                            },
+                            "Call_C10_Revoke_Sessions": {
+                                "runAfter": { "Set_HasHighRiskUser": ["Succeeded"] },
+                                "type": "Http",
+                                "inputs": {
+                                    "uri": "__C10_TRIGGER_URL__",
+                                    "method": "POST",
+                                    "headers": { "Content-Type": "application/json" },
+                                    "body": {
+                                        "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                        "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                    }
+                                }
+                            },
+                            "If_User_Privileged": {
+                                "runAfter": { "Call_C10_Revoke_Sessions": ["Succeeded", "Failed"] },
+                                "type": "If",
+                                "expression": {
+                                    "equals": ["@coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false)", true]
+                                },
+                                "actions": {
+                                    "Call_C7_Disable_Account": {
+                                        "type": "Http",
+                                        "inputs": {
+                                            "uri": "__C7_TRIGGER_URL__",
+                                            "method": "POST",
+                                            "headers": { "Content-Type": "application/json" },
+                                            "body": {
+                                                "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                                "Reason": "Privileged account flagged as high risk — automated disable via P1-Universal-Enrichment",
+                                                "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                            }
+                                        }
+                                    }
+                                },
+                                "else": { "actions": {} }
+                            },
+                            "Append_User_Result_High": {
+                                "runAfter": { "If_User_Privileged": ["Succeeded"] },
+                                "type": "AppendToArrayVariable",
+                                "inputs": { "name": "UserResults", "value": "@body('Parse_C4_Response')" }
+                            },
+                            "Append_UserSummary_High": {
+                                "runAfter": { "Append_User_Result_High": ["Succeeded"] },
+                                "type": "AppendToStringVariable",
+                                "inputs": {
+                                    "name": "UserSummary",
+                                    "value": "@{concat('<b>User (HIGH RISK):</b> ', coalesce(body('Parse_C4_Response')?['UserPrincipalName'], ''), ' (', coalesce(body('Parse_C4_Response')?['DisplayName'], ''), ')<br>Entra Risk: ', coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none'), ' | Priority: ', coalesce(body('Parse_C4_Response')?['InvestigationPriority'], 0), ' | Privileged: ', coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false), ' | Location: ', coalesce(body('Parse_C4_Response')?['LastSignInLocation'], 'Unknown'), '<br>Action: Sessions revoked', if(coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false), ' + Account disabled', ''), '<br><br>')}"
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {
+                                "Append_User_Result_Normal": {
+                                    "runAfter": {},
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": { "name": "UserResults", "value": "@body('Parse_C4_Response')" }
+                                },
+                                "Append_UserSummary_Normal": {
+                                    "runAfter": { "Append_User_Result_Normal": ["Succeeded"] },
+                                    "type": "AppendToStringVariable",
+                                    "inputs": {
+                                        "name": "UserSummary",
+                                        "value": "@{concat('<b>User:</b> ', coalesce(body('Parse_C4_Response')?['UserPrincipalName'], ''), ' (', coalesce(body('Parse_C4_Response')?['DisplayName'], ''), ')<br>Entra Risk: ', coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none'), ' | Priority: ', coalesce(body('Parse_C4_Response')?['InvestigationPriority'], 0), ' | Privileged: ', coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false), ' | Location: ', coalesce(body('Parse_C4_Response')?['LastSignInLocation'], 'Unknown'), '<br><br>')}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "Check_RiskTier_High": {
+                "runAfter": {
+                    "For_each_IP": ["Succeeded", "Failed", "Skipped"],
+                    "For_each_Account": ["Succeeded", "Failed", "Skipped"]
+                },
+                "type": "If",
+                "expression": {
+                    "or": [
+                        { "equals": ["@variables('HasHighRiskIP')", true] },
+                        { "equals": ["@variables('HasHighRiskUser')", true] }
+                    ]
+                },
+                "actions": {
+                    "Update_Incident_Severity_High": {
+                        "runAfter": {},
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                            "method": "put",
+                            "body": {
+                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                "severity": "High",
+                                "status": "Active"
+                            },
+                            "path": "/Incidents"
+                        }
+                    },
+                    "Call_C6_Notify_Teams": {
+                        "runAfter": { "Update_Incident_Severity_High": ["Succeeded", "Failed"] },
+                        "type": "Http",
+                        "inputs": {
+                            "uri": "__C6_TRIGGER_URL__",
+                            "method": "POST",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "IncidentTitle": "@{coalesce(triggerBody()?['object']?['properties']?['title'], 'Security Incident')}",
+                                "Severity": "High",
+                                "IncidentId": "@{coalesce(triggerBody()?['object']?['properties']?['incidentNumber'], '')}",
+                                "IncidentUrl": "@{coalesce(triggerBody()?['object']?['properties']?['incidentUrl'], '')}",
+                                "AlertDetails": "@{concat(length(variables('UserResults')), ' account(s) and ', length(variables('IPResults')), ' IP(s) analyzed. High risk indicators detected. Remediations applied (sessions revoked; privileged accounts disabled). Review Sentinel for full details.')}"
+                            }
+                        }
+                    },
+                    "Add_Comment_High_Risk": {
+                        "runAfter": { "Call_C6_Notify_Teams": ["Succeeded", "Failed"] },
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                            "method": "post",
+                            "body": {
+                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                "message": "<p><strong>[P1 Universal Enrichment — HIGH RISK]</strong><br>\nIPs analyzed: @{length(variables('IPResults'))} | Accounts analyzed: @{length(variables('UserResults'))}<br>\n<br>\n<strong>IP Summary:</strong><br>\n@{if(empty(variables('IPSummary')), 'No IPs found.', variables('IPSummary'))}<strong>User Summary:</strong><br>\n@{if(empty(variables('UserSummary')), 'No accounts found.', variables('UserSummary'))}<strong>Actions taken:</strong> Sessions revoked for high-risk users. Privileged accounts disabled. SOC notified via Teams. Incident severity set to High.</p>"
+                            },
+                            "path": "/Incidents/Comment"
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {
+                        "Add_Comment_Standard": {
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                "method": "post",
+                                "body": {
+                                    "incidentArmId": "@triggerBody()?['object']?['id']",
+                                    "message": "<p><strong>[P1 Universal Enrichment]</strong><br>\nIPs analyzed: @{length(variables('IPResults'))} | Accounts analyzed: @{length(variables('UserResults'))}<br>\nNo high-risk indicators detected.<br>\n<br>\n<strong>IP Summary:</strong><br>\n@{if(empty(variables('IPSummary')), 'No IPs found.', variables('IPSummary'))}<strong>User Summary:</strong><br>\n@{if(empty(variables('UserSummary')), 'No accounts found.', variables('UserSummary'))}</p>"
+                                },
+                                "path": "/Incidents/Comment"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "azuresentinel": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuresentinel",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuresentinel-P1-Universal-Enrichment",
+                    "connectionName": "azuresentinel-P1-Universal-Enrichment",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

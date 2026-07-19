@@ -1,0 +1,298 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "Microsoft_Sentinel_incident": {
+                "type": "ApiConnectionWebhook",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "body": { "callback_url": "@{listCallbackUrl()}" },
+                    "path": "/incident-creation"
+                }
+            }
+        },
+        "actions": {
+            "Initialize_HasImpossibleTravel": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "HasImpossibleTravel", "type": "boolean", "value": false }] }
+            },
+            "Initialize_UserResults": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "UserResults", "type": "array", "value": [] }] }
+            },
+            "Initialize_UserSummary": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "UserSummary", "type": "string", "value": "" }] }
+            },
+            "Entities_Get_Accounts": {
+                "runAfter": {
+                    "Initialize_HasImpossibleTravel": ["Succeeded"],
+                    "Initialize_UserResults": ["Succeeded"],
+                    "Initialize_UserSummary": ["Succeeded"]
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "method": "post",
+                    "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                    "path": "/entities/account"
+                }
+            },
+            "For_each_Account": {
+                "runAfter": { "Entities_Get_Accounts": ["Succeeded"] },
+                "type": "Foreach",
+                "operationOptions": "Sequential",
+                "foreach": "@body('Entities_Get_Accounts')?['Accounts']",
+                "actions": {
+                    "Call_C4_Enrich_User": {
+                        "runAfter": {},
+                        "type": "Http",
+                        "inputs": {
+                            "uri": "__C4_TRIGGER_URL__",
+                            "method": "POST",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "UserPrincipalName": "@{concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__')}",
+                                "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                            }
+                        }
+                    },
+                    "KQL_Impossible_Travel": {
+                        "runAfter": {},
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                            "method": "post",
+                            "body": "SigninLogs\n| where TimeGenerated >= ago(4h)\n| where UserPrincipalName =~ '@{concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__')}'\n| where ResultType == 0\n| extend Country = tostring(LocationDetails.countryOrRegion)\n| where isnotempty(Country)\n| summarize\n    DistinctCountries = dcount(Country),\n    Countries = tostring(make_set(Country, 10)),\n    TravelWindowMinutes = datetime_diff('minute', max(TimeGenerated), min(TimeGenerated))\n| where DistinctCountries > 1\n| project DistinctCountries, Countries, TravelWindowMinutes",
+                            "path": "/queryData",
+                            "queries": {
+                                "subscriptions": "__SUBSCRIPTION_ID__",
+                                "resourcegroups": "__RESOURCE_GROUP__",
+                                "resourcetype": "Log Analytics Workspace",
+                                "resourcename": "__WORKSPACE_NAME__",
+                                "timerange": "Last 4 hours"
+                            }
+                        }
+                    },
+                    "Parse_C4_Response": {
+                        "runAfter": { "Call_C4_Enrich_User": ["Succeeded", "Failed"] },
+                        "type": "ParseJson",
+                        "inputs": {
+                            "content": "@body('Call_C4_Enrich_User')",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "UserPrincipalName": { "type": "string" },
+                                    "DisplayName": { "type": "string" },
+                                    "Department": { "type": "string" },
+                                    "EntraRiskLevel": { "type": "string" },
+                                    "IsPrivilegedAccount": { "type": "boolean" },
+                                    "EscalateToSOC": { "type": "boolean" },
+                                    "InvestigationPriority": { "type": "integer" },
+                                    "LastSignInLocation": { "type": "string" }
+                                }
+                            }
+                        }
+                    },
+                    "Evaluate_Travel_Risk": {
+                        "runAfter": {
+                            "Parse_C4_Response": ["Succeeded", "Failed"],
+                            "KQL_Impossible_Travel": ["Succeeded", "Failed"]
+                        },
+                        "type": "If",
+                        "expression": {
+                            "greater": ["@length(coalesce(body('KQL_Impossible_Travel')?['value'], json('[]')))", 0]
+                        },
+                        "actions": {
+                            "Set_HasImpossibleTravel": {
+                                "runAfter": {},
+                                "type": "SetVariable",
+                                "inputs": { "name": "HasImpossibleTravel", "value": true }
+                            },
+                            "Call_C10_Revoke": {
+                                "runAfter": { "Set_HasImpossibleTravel": ["Succeeded"] },
+                                "type": "Http",
+                                "inputs": {
+                                    "uri": "__C10_TRIGGER_URL__",
+                                    "method": "POST",
+                                    "headers": { "Content-Type": "application/json" },
+                                    "body": {
+                                        "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                        "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                    }
+                                }
+                            },
+                            "If_Privileged_Disable": {
+                                "runAfter": { "Call_C10_Revoke": ["Succeeded", "Failed"] },
+                                "type": "If",
+                                "expression": {
+                                    "equals": ["@coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false)", true]
+                                },
+                                "actions": {
+                                    "Call_C7_Disable": {
+                                        "type": "Http",
+                                        "inputs": {
+                                            "uri": "__C7_TRIGGER_URL__",
+                                            "method": "POST",
+                                            "headers": { "Content-Type": "application/json" },
+                                            "body": {
+                                                "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                                "Reason": "Privileged account flagged for impossible travel — automated disable via P4-ImpossibleTravel",
+                                                "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                            }
+                                        }
+                                    }
+                                },
+                                "else": { "actions": {} }
+                            },
+                            "Append_UserResult_Travel": {
+                                "runAfter": { "If_Privileged_Disable": ["Succeeded"] },
+                                "type": "AppendToArrayVariable",
+                                "inputs": {
+                                    "name": "UserResults",
+                                    "value": {
+                                        "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                        "DisplayName": "@{coalesce(body('Parse_C4_Response')?['DisplayName'], '')}",
+                                        "TravelDetected": true,
+                                        "DistinctCountries": "@{coalesce(first(body('KQL_Impossible_Travel')?['value'])?['DistinctCountries'], 0)}",
+                                        "Countries": "@{coalesce(first(body('KQL_Impossible_Travel')?['value'])?['Countries'], '')}",
+                                        "TravelWindowMinutes": "@{coalesce(first(body('KQL_Impossible_Travel')?['value'])?['TravelWindowMinutes'], 0)}",
+                                        "EntraRiskLevel": "@{coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none')}",
+                                        "IsPrivilegedAccount": "@{coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false)}"
+                                    }
+                                }
+                            },
+                            "Append_UserSummary_Travel": {
+                                "runAfter": { "Append_UserResult_Travel": ["Succeeded"] },
+                                "type": "AppendToStringVariable",
+                                "inputs": {
+                                    "name": "UserSummary",
+                                    "value": "@{concat('<b>User (TRAVEL DETECTED):</b> ', coalesce(body('Parse_C4_Response')?['UserPrincipalName'], ''), '<br>Countries: ', coalesce(first(body('KQL_Impossible_Travel')?['value'])?['Countries'], ''), ' | Window: ', coalesce(first(body('KQL_Impossible_Travel')?['value'])?['TravelWindowMinutes'], 0), ' min | Privileged: ', coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false), '<br>Action: Sessions revoked', if(coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false), ' + Account disabled', ''), '<br><br>')}"
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {
+                                "Append_UserResult_Normal": {
+                                    "runAfter": {},
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "UserResults",
+                                        "value": {
+                                            "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                            "DisplayName": "@{coalesce(body('Parse_C4_Response')?['DisplayName'], '')}",
+                                            "TravelDetected": false,
+                                            "EntraRiskLevel": "@{coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none')}",
+                                            "IsPrivilegedAccount": "@{coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false)}"
+                                        }
+                                    }
+                                },
+                                "Append_UserSummary_Normal": {
+                                    "runAfter": { "Append_UserResult_Normal": ["Succeeded"] },
+                                    "type": "AppendToStringVariable",
+                                    "inputs": {
+                                        "name": "UserSummary",
+                                        "value": "@{concat('<b>User:</b> ', coalesce(body('Parse_C4_Response')?['UserPrincipalName'], ''), ' | No impossible travel detected in 4h window<br><br>')}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "Check_Impossible_Travel": {
+                "runAfter": { "For_each_Account": ["Succeeded", "Failed", "Skipped"] },
+                "type": "If",
+                "expression": { "equals": ["@variables('HasImpossibleTravel')", true] },
+                "actions": {
+                    "Update_Incident_High": {
+                        "runAfter": {},
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                            "method": "put",
+                            "body": {
+                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                "severity": "High",
+                                "status": "Active"
+                            },
+                            "path": "/Incidents"
+                        }
+                    },
+                    "Call_C6_Notify_Teams": {
+                        "runAfter": { "Update_Incident_High": ["Succeeded", "Failed"] },
+                        "type": "Http",
+                        "inputs": {
+                            "uri": "__C6_TRIGGER_URL__",
+                            "method": "POST",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "IncidentTitle": "@{coalesce(triggerBody()?['object']?['properties']?['title'], 'Impossible Travel Detected')}",
+                                "Severity": "High",
+                                "IncidentId": "@{coalesce(triggerBody()?['object']?['properties']?['incidentNumber'], '')}",
+                                "IncidentUrl": "@{coalesce(triggerBody()?['object']?['properties']?['incidentUrl'], '')}",
+                                "AlertDetails": "@{concat(length(variables('UserResults')), ' account(s) analyzed. Impossible travel detected. Sessions revoked for affected users. Privileged accounts disabled where applicable. Review the Sentinel incident for full details.')}"
+                            }
+                        }
+                    },
+                    "Add_Comment_Travel_Detected": {
+                        "runAfter": { "Call_C6_Notify_Teams": ["Succeeded", "Failed"] },
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                            "method": "post",
+                            "body": {
+                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                "message": "<p><strong>[P4 Impossible Travel — TRAVEL DETECTED]</strong><br>\nAccounts analyzed: @{length(variables('UserResults'))}<br><br>\n@{variables('UserSummary')}<strong>Actions taken:</strong> Sessions revoked for users with impossible travel. Privileged accounts disabled. SOC notified via Teams. Incident severity set to High.<br><br>\n<strong>Recommended next steps:</strong> Confirm whether travel is legitimate. If compromise is confirmed, initiate full account recovery and credential reset.</p>"
+                            },
+                            "path": "/Incidents/Comment"
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {
+                        "Add_Comment_No_Travel": {
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                "method": "post",
+                                "body": {
+                                    "incidentArmId": "@triggerBody()?['object']?['id']",
+                                    "message": "<p><strong>[P4 Impossible Travel]</strong><br>\nAccounts analyzed: @{length(variables('UserResults'))}<br>\nNo impossible travel detected in the 4-hour sign-in window for any account associated with this incident.<br><br>\n@{variables('UserSummary')}</p>"
+                                },
+                                "path": "/Incidents/Comment"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "azuresentinel": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuresentinel",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuresentinel-P4-ImpossibleTravel",
+                    "connectionName": "azuresentinel-P4-ImpossibleTravel",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                },
+                "azuremonitorlogs": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuremonitorlogs",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuremonitorlogs-P4",
+                    "connectionName": "azuremonitorlogs-P4",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

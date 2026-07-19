@@ -1,0 +1,69 @@
+name: Sync Sentinel Watchlists
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'watchlists/**'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Watchlist to sync — name (e.g. TrustedIPs) or "all"'
+        required: false
+        default: 'all'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve watchlists to sync
+        id: targets
+        env:
+          INPUT_TARGET: ${{ github.event.inputs.target }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == "workflow_dispatch" && "$INPUT_TARGET" != "all" && -n "$INPUT_TARGET" ]]; then
+            echo "aliases=$INPUT_TARGET" >> $GITHUB_OUTPUT
+          elif [[ "$EVENT" == "workflow_dispatch" ]]; then
+            ALIASES=$(ls watchlists/*.csv | xargs -I{} basename {} .csv | tr '\n' ' ')
+            echo "aliases=$ALIASES" >> $GITHUB_OUTPUT
+          else
+            # Push event — sync only changed CSVs
+            CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'watchlists/*.csv' \
+              | xargs -I{} basename {} .csv | tr '\n' ' ')
+            if [[ -z "$CHANGED" ]]; then
+              echo "No watchlist CSVs changed, nothing to sync"
+              echo "aliases=" >> $GITHUB_OUTPUT
+            else
+              echo "aliases=$CHANGED" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Sync watchlists
+        if: steps.targets.outputs.aliases != ''
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          RESOURCE_GROUP: ${{ vars.SENTINEL_RESOURCE_GROUP }}
+          WORKSPACE_NAME: ${{ vars.SENTINEL_WORKSPACE_NAME }}
+        run: |
+          chmod +x scripts/sync-watchlist.sh
+          for ALIAS in ${{ steps.targets.outputs.aliases }}; do
+            echo "--- Syncing $ALIAS ---"
+            ./scripts/sync-watchlist.sh "$ALIAS"
+          done

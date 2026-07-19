@@ -1,0 +1,253 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "Microsoft_Sentinel_incident": {
+                "type": "ApiConnectionWebhook",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "body": { "callback_url": "@{listCallbackUrl()}" },
+                    "path": "/incident-creation"
+                }
+            }
+        },
+        "actions": {
+            "Initialize_URLResults": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "URLResults", "type": "array", "value": [] }] }
+            },
+            "Initialize_HasMaliciousURL": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "HasMaliciousURL", "type": "boolean", "value": false }] }
+            },
+            "Initialize_CommentBody": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "CommentBody", "type": "string", "value": "" }] }
+            },
+            "Entities_Get_URLs": {
+                "runAfter": {
+                    "Initialize_URLResults": ["Succeeded"],
+                    "Initialize_HasMaliciousURL": ["Succeeded"],
+                    "Initialize_CommentBody": ["Succeeded"]
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "method": "post",
+                    "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                    "path": "/entities/url"
+                }
+            },
+            "Filter_Empty_URLs": {
+                "runAfter": { "Entities_Get_URLs": ["Succeeded"] },
+                "type": "Query",
+                "inputs": {
+                    "from": "@body('Entities_Get_URLs')?['Urls']",
+                    "where": "@not(empty(coalesce(item()?['url'], '')))"
+                }
+            },
+            "Filter_Image_URLs": {
+                "runAfter": { "Filter_Empty_URLs": ["Succeeded"] },
+                "type": "Query",
+                "inputs": {
+                    "from": "@body('Filter_Empty_URLs')",
+                    "where": "@and(not(endsWith(toLower(item()?['url']), '.png')), not(endsWith(toLower(item()?['url']), '.jpg')), not(endsWith(toLower(item()?['url']), '.gif')), not(endsWith(toLower(item()?['url']), '.svg')), not(endsWith(toLower(item()?['url']), '.ico')))"
+                }
+            },
+            "Select_URL_Strings": {
+                "runAfter": { "Filter_Image_URLs": ["Succeeded"] },
+                "type": "Select",
+                "inputs": {
+                    "from": "@body('Filter_Image_URLs')",
+                    "select": "@item()?['url']"
+                }
+            },
+            "Check_URLs_Found": {
+                "runAfter": { "Select_URL_Strings": ["Succeeded"] },
+                "type": "If",
+                "expression": {
+                    "greater": ["@length(coalesce(body('Select_URL_Strings'), json('[]')))", 0]
+                },
+                "actions": {
+                    "For_each_URL": {
+                        "runAfter": {},
+                        "type": "Foreach",
+                        "operationOptions": "Sequential",
+                        "foreach": "@body('Select_URL_Strings')",
+                        "actions": {
+                            "Call_C2_Enrich_URL": {
+                                "runAfter": {},
+                                "type": "Http",
+                                "inputs": {
+                                    "uri": "__C2_TRIGGER_URL__",
+                                    "method": "POST",
+                                    "headers": { "Content-Type": "application/json" },
+                                    "body": {
+                                        "URL": "@{items('For_each_URL')}",
+                                        "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                    }
+                                }
+                            },
+                            "Parse_C2_Response": {
+                                "runAfter": { "Call_C2_Enrich_URL": ["Succeeded", "Failed"] },
+                                "type": "ParseJson",
+                                "inputs": {
+                                    "content": "@body('Call_C2_Enrich_URL')",
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "URL": { "type": "string" },
+                                            "ScanId": { "type": ["string", "null"] },
+                                            "ScanURL": { "type": ["string", "null"] },
+                                            "ScreenshotURL": { "type": ["string", "null"] },
+                                            "ThreatScore": { "type": "integer" },
+                                            "IsMalicious": { "type": "boolean" },
+                                            "ThreatLevel": { "type": "string" },
+                                            "Tags": { "type": "string" },
+                                            "Categories": { "type": "string" },
+                                            "FinalURL": { "type": "string" },
+                                            "IP": { "type": ["string", "null"] },
+                                            "Country": { "type": ["string", "null"] },
+                                            "ScanComplete": { "type": "boolean" }
+                                        }
+                                    }
+                                }
+                            },
+                            "If_URL_Malicious": {
+                                "runAfter": { "Parse_C2_Response": ["Succeeded", "Failed"] },
+                                "type": "If",
+                                "expression": {
+                                    "equals": ["@coalesce(body('Parse_C2_Response')?['IsMalicious'], false)", true]
+                                },
+                                "actions": {
+                                    "Set_HasMaliciousURL": {
+                                        "type": "SetVariable",
+                                        "inputs": { "name": "HasMaliciousURL", "value": true }
+                                    }
+                                },
+                                "else": { "actions": {} }
+                            },
+                            "Append_URL_Result": {
+                                "runAfter": { "If_URL_Malicious": ["Succeeded"] },
+                                "type": "AppendToArrayVariable",
+                                "inputs": {
+                                    "name": "URLResults",
+                                    "value": {
+                                        "URL": "@{items('For_each_URL')}",
+                                        "ThreatLevel": "@{coalesce(body('Parse_C2_Response')?['ThreatLevel'], 'Unknown')}",
+                                        "ThreatScore": "@{coalesce(body('Parse_C2_Response')?['ThreatScore'], 0)}",
+                                        "IsMalicious": "@{coalesce(body('Parse_C2_Response')?['IsMalicious'], false)}",
+                                        "Tags": "@{coalesce(body('Parse_C2_Response')?['Tags'], '')}",
+                                        "Categories": "@{coalesce(body('Parse_C2_Response')?['Categories'], '')}",
+                                        "ScanURL": "@{coalesce(body('Parse_C2_Response')?['ScanURL'], '')}",
+                                        "ScreenshotURL": "@{coalesce(body('Parse_C2_Response')?['ScreenshotURL'], '')}",
+                                        "IP": "@{coalesce(body('Parse_C2_Response')?['IP'], null)}",
+                                        "Country": "@{coalesce(body('Parse_C2_Response')?['Country'], null)}",
+                                        "ScanComplete": "@{coalesce(body('Parse_C2_Response')?['ScanComplete'], false)}"
+                                    }
+                                }
+                            },
+                            "Append_CommentBody": {
+                                "runAfter": { "Append_URL_Result": ["Succeeded"] },
+                                "type": "AppendToStringVariable",
+                                "inputs": {
+                                    "name": "CommentBody",
+                                    "value": "@{concat('<b>URL:</b> ', items('For_each_URL'), '<br>Threat: ', coalesce(body('Parse_C2_Response')?['ThreatLevel'], 'Unknown'), ' (Score: ', coalesce(body('Parse_C2_Response')?['ThreatScore'], 0), ') | Malicious: ', coalesce(body('Parse_C2_Response')?['IsMalicious'], false), '<br>Tags: ', coalesce(body('Parse_C2_Response')?['Tags'], 'None'), ' | Categories: ', coalesce(body('Parse_C2_Response')?['Categories'], 'None'), '<br>Country: ', coalesce(body('Parse_C2_Response')?['Country'], 'N/A'), ' | IP: ', coalesce(body('Parse_C2_Response')?['IP'], 'N/A'), '<br>Scan Report: ', coalesce(body('Parse_C2_Response')?['ScanURL'], 'Not available'), '<br><br>')}"
+                                }
+                            }
+                        }
+                    },
+                    "Check_Severity": {
+                        "runAfter": { "For_each_URL": ["Succeeded", "Failed", "Skipped"] },
+                        "type": "If",
+                        "expression": {
+                            "equals": ["@variables('HasMaliciousURL')", true]
+                        },
+                        "actions": {
+                            "Update_Incident_High": {
+                                "runAfter": {},
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                    "method": "put",
+                                    "body": {
+                                        "incidentArmId": "@triggerBody()?['object']?['id']",
+                                        "severity": "High",
+                                        "status": "Active"
+                                    },
+                                    "path": "/Incidents"
+                                }
+                            },
+                            "Add_Comment_Malicious": {
+                                "runAfter": { "Update_Incident_High": ["Succeeded"] },
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                    "method": "post",
+                                    "body": {
+                                        "incidentArmId": "@triggerBody()?['object']?['id']",
+                                        "message": "<p><strong>[P3 URL Enrichment — MALICIOUS URL DETECTED]</strong><br>\nURLs scanned: @{length(variables('URLResults'))}<br><br>\n@{variables('CommentBody')}<strong>Action taken:</strong> Incident severity set to High. Review scan reports above before clicking any URLs.</p>"
+                                    },
+                                    "path": "/Incidents/Comment"
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {
+                                "Add_Comment_Clean": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                        "method": "post",
+                                        "body": {
+                                            "incidentArmId": "@triggerBody()?['object']?['id']",
+                                            "message": "<p><strong>[P3 URL Enrichment]</strong><br>\nURLs scanned: @{length(variables('URLResults'))} — No malicious URLs detected. All URLs scored below threshold.<br><br>\n@{variables('CommentBody')}</p>"
+                                        },
+                                        "path": "/Incidents/Comment"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {
+                        "Add_Comment_No_URLs": {
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                "method": "post",
+                                "body": {
+                                    "incidentArmId": "@triggerBody()?['object']?['id']",
+                                    "message": "<p><strong>[P3 URL Enrichment]</strong><br>\nNo scannable URLs found in incident entities (empty or image-only URLs excluded).</p>"
+                                },
+                                "path": "/Incidents/Comment"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "azuresentinel": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuresentinel",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuresentinel-P3-URL-Enrichment",
+                    "connectionName": "azuresentinel-P3-URL-Enrichment",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

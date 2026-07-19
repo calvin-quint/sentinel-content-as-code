@@ -1,0 +1,450 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "Microsoft_Sentinel_incident": {
+                "type": "ApiConnectionWebhook",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "body": { "callback_url": "@{listCallbackUrl()}" },
+                    "path": "/incident-creation"
+                }
+            }
+        },
+        "actions": {
+            "Initialize_URLResults": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "URLResults", "type": "array", "value": [] }] }
+            },
+            "Initialize_HasMaliciousURL": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "HasMaliciousURL", "type": "boolean", "value": false }] }
+            },
+            "Initialize_HasPostClickSignIn": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "HasPostClickSignIn", "type": "boolean", "value": false }] }
+            },
+            "Entities_Get_Accounts": {
+                "runAfter": {
+                    "Initialize_URLResults": ["Succeeded"],
+                    "Initialize_HasMaliciousURL": ["Succeeded"],
+                    "Initialize_HasPostClickSignIn": ["Succeeded"]
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "method": "post",
+                    "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                    "path": "/entities/account"
+                }
+            },
+            "For_each_Account": {
+                "runAfter": { "Entities_Get_Accounts": ["Succeeded"] },
+                "type": "Foreach",
+                "operationOptions": "Sequential",
+                "foreach": "@body('Entities_Get_Accounts')?['Accounts']",
+                "actions": {
+                    "Call_C5_GetURL": {
+                        "runAfter": {},
+                        "type": "Http",
+                        "inputs": {
+                            "uri": "__C5_TRIGGER_URL__",
+                            "method": "POST",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "UserPrincipalName": "@{items('For_each_Account')?['Name']}@__TENANT_DOMAIN__",
+                                "IncidentId": "@{triggerBody()?['object']?['id']}"
+                            }
+                        }
+                    },
+                    "Parse_C5_Response": {
+                        "runAfter": { "Call_C5_GetURL": ["Succeeded"] },
+                        "type": "ParseJson",
+                        "inputs": {
+                            "content": "@body('Call_C5_GetURL')",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ClickedURL": { "type": ["string", "null"] },
+                                    "NetworkMessageId": { "type": ["string", "null"] },
+                                    "IsClickedThrough": {},
+                                    "ClickTime": { "type": ["string", "null"] },
+                                    "URLSource": { "type": ["string", "null"] },
+                                    "URLFound": { "type": "boolean" },
+                                    "UserPrincipalName": { "type": "string" },
+                                    "IncidentId": { "type": "string" }
+                                }
+                            }
+                        }
+                    },
+                    "If_URL_Found": {
+                        "runAfter": { "Parse_C5_Response": ["Succeeded", "Failed"] },
+                        "type": "If",
+                        "expression": {
+                            "equals": ["@coalesce(body('Parse_C5_Response')?['URLFound'], false)", true]
+                        },
+                        "actions": {
+                            "Call_C2_Enrich_URL": {
+                                "runAfter": {},
+                                "type": "Http",
+                                "inputs": {
+                                    "uri": "__C2_TRIGGER_URL__",
+                                    "method": "POST",
+                                    "headers": { "Content-Type": "application/json" },
+                                    "body": {
+                                        "URL": "@{body('Parse_C5_Response')?['ClickedURL']}",
+                                        "NetworkMessageId": "@{body('Parse_C5_Response')?['NetworkMessageId']}",
+                                        "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                    }
+                                }
+                            },
+                            "KQL_PostClick_SignIn": {
+                                "runAfter": {},
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                                    "method": "post",
+                                    "body": {
+                                        "query": "SigninLogs\n| where UserPrincipalName =~ '@{items('For_each_Account')?['Name']}@__TENANT_DOMAIN__'\n| where TimeGenerated between(\n    todatetime('@{body('Parse_C5_Response')?['ClickTime']}')\n    .. datetime_add('minute', 30, todatetime('@{body('Parse_C5_Response')?['ClickTime']}'))\n  )\n| where ResultType == '0'\n| top 5 by TimeGenerated asc\n| project\n    SignInTime = TimeGenerated,\n    IPAddress,\n    Location = tostring(LocationDetails.countryOrRegion),\n    City = tostring(LocationDetails.city),\n    AppDisplayName,\n    RiskLevelDuringSignIn",
+                                        "timerangetype": "Set in query"
+                                    },
+                                    "path": "/queryData",
+                                    "queries": {
+                                        "subscriptions": "__SUBSCRIPTION_ID__",
+                                        "resourcegroups": "__RESOURCE_GROUP__",
+                                        "resourcetype": "Log Analytics Workspace",
+                                        "resourcename": "__WORKSPACE_NAME__",
+                                        "timerange": "Set in query"
+                                    }
+                                }
+                            },
+                            "Call_C4_WithURL": {
+                                "runAfter": {},
+                                "type": "Http",
+                                "inputs": {
+                                    "uri": "__C4_TRIGGER_URL__",
+                                    "method": "POST",
+                                    "headers": { "Content-Type": "application/json" },
+                                    "body": {
+                                        "UserPrincipalName": "@{items('For_each_Account')?['Name']}@__TENANT_DOMAIN__",
+                                        "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                    }
+                                }
+                            },
+                            "Parse_C2_Response": {
+                                "runAfter": { "Call_C2_Enrich_URL": ["Succeeded", "Failed"] },
+                                "type": "ParseJson",
+                                "inputs": {
+                                    "content": "@body('Call_C2_Enrich_URL')",
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "URL": { "type": "string" },
+                                            "ScanId": { "type": ["string", "null"] },
+                                            "ScanURL": { "type": ["string", "null"] },
+                                            "ScreenshotURL": { "type": ["string", "null"] },
+                                            "ThreatScore": { "type": "integer" },
+                                            "IsMalicious": { "type": "boolean" },
+                                            "ThreatLevel": { "type": "string" },
+                                            "Tags": { "type": "string" },
+                                            "Categories": { "type": ["string", "null"] },
+                                            "IP": { "type": ["string", "null"] },
+                                            "Country": { "type": ["string", "null"] },
+                                            "ScanComplete": { "type": "boolean" }
+                                        }
+                                    }
+                                }
+                            },
+                            "Parse_C4_WithURL": {
+                                "runAfter": { "Call_C4_WithURL": ["Succeeded"] },
+                                "type": "ParseJson",
+                                "inputs": {
+                                    "content": "@body('Call_C4_WithURL')",
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "UserPrincipalName": { "type": "string" },
+                                            "DisplayName": { "type": "string" },
+                                            "Department": { "type": "string" },
+                                            "EntraRiskLevel": { "type": "string" },
+                                            "EntraRiskState": { "type": "string" },
+                                            "LastSignInLocation": { "type": "string" },
+                                            "DistinctCountries90d": { "type": "integer" },
+                                            "InvestigationPriority": { "type": "integer" },
+                                            "IsServiceAccount": { "type": "boolean" },
+                                            "IsPrivilegedAccount": { "type": "boolean" },
+                                            "DaysSinceLastSignIn": { "type": "integer" },
+                                            "IsDormant": { "type": "boolean" },
+                                            "EscalateToSOC": { "type": "boolean" },
+                                            "EarlyExit": { "type": "boolean" }
+                                        }
+                                    }
+                                }
+                            },
+                            "If_URL_Malicious": {
+                                "runAfter": { "Parse_C2_Response": ["Succeeded", "Failed"] },
+                                "type": "If",
+                                "expression": {
+                                    "equals": ["@coalesce(body('Parse_C2_Response')?['IsMalicious'], false)", true]
+                                },
+                                "actions": {
+                                    "Set_HasMaliciousURL": {
+                                        "type": "SetVariable",
+                                        "inputs": { "name": "HasMaliciousURL", "value": true }
+                                    }
+                                },
+                                "else": { "actions": {} }
+                            },
+                            "If_PostClick_SignIn": {
+                                "runAfter": { "KQL_PostClick_SignIn": ["Succeeded", "Failed"] },
+                                "type": "If",
+                                "expression": {
+                                    "greater": ["@length(coalesce(body('KQL_PostClick_SignIn')?['value'], json('[]')))", 0]
+                                },
+                                "actions": {
+                                    "Set_HasPostClickSignIn": {
+                                        "type": "SetVariable",
+                                        "inputs": { "name": "HasPostClickSignIn", "value": true }
+                                    }
+                                },
+                                "else": { "actions": {} }
+                            },
+                            "Append_URL_Result": {
+                                "runAfter": {
+                                    "Parse_C4_WithURL": ["Succeeded", "Failed"],
+                                    "If_URL_Malicious": ["Succeeded"],
+                                    "If_PostClick_SignIn": ["Succeeded"]
+                                },
+                                "type": "AppendToArrayVariable",
+                                "inputs": {
+                                    "name": "URLResults",
+                                    "value": {
+                                        "UserPrincipalName": "@{items('For_each_Account')?['Name']}@__TENANT_DOMAIN__",
+                                        "ClickedURL": "@{body('Parse_C5_Response')?['ClickedURL']}",
+                                        "URLSource": "@{body('Parse_C5_Response')?['URLSource']}",
+                                        "ClickTime": "@{body('Parse_C5_Response')?['ClickTime']}",
+                                        "IsClickedThrough": "@{body('Parse_C5_Response')?['IsClickedThrough']}",
+                                        "URLThreatLevel": "@{coalesce(body('Parse_C2_Response')?['ThreatLevel'], 'Unknown')}",
+                                        "ThreatScore": "@{coalesce(body('Parse_C2_Response')?['ThreatScore'], 0)}",
+                                        "IsMalicious": "@{coalesce(body('Parse_C2_Response')?['IsMalicious'], false)}",
+                                        "Tags": "@{coalesce(body('Parse_C2_Response')?['Tags'], '')}",
+                                        "ScanURL": "@{coalesce(body('Parse_C2_Response')?['ScanURL'], '')}",
+                                        "PostClickSignInFound": "@{greater(length(coalesce(body('KQL_PostClick_SignIn')?['value'], json('[]'))), 0)}",
+                                        "PostClickSignInCount": "@{length(coalesce(body('KQL_PostClick_SignIn')?['value'], json('[]')))}",
+                                        "PostClickSignInIP": "@{coalesce(first(body('KQL_PostClick_SignIn')?['value'])?['IPAddress'], null)}",
+                                        "PostClickSignInLocation": "@{coalesce(first(body('KQL_PostClick_SignIn')?['value'])?['Location'], null)}",
+                                        "PostClickSignInApp": "@{coalesce(first(body('KQL_PostClick_SignIn')?['value'])?['AppDisplayName'], null)}",
+                                        "EntraRiskLevel": "@{coalesce(body('Parse_C4_WithURL')?['EntraRiskLevel'], 'none')}",
+                                        "InvestigationPriority": "@{coalesce(body('Parse_C4_WithURL')?['InvestigationPriority'], 0)}",
+                                        "IsPrivilegedAccount": "@{coalesce(body('Parse_C4_WithURL')?['IsPrivilegedAccount'], false)}",
+                                        "EscalateToSOC": "@{coalesce(body('Parse_C4_WithURL')?['EscalateToSOC'], false)}"
+                                    }
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {
+                                "Call_C4_NoURL": {
+                                    "runAfter": {},
+                                    "type": "Http",
+                                    "inputs": {
+                                        "uri": "__C4_TRIGGER_URL__",
+                                        "method": "POST",
+                                        "headers": { "Content-Type": "application/json" },
+                                        "body": {
+                                            "UserPrincipalName": "@{items('For_each_Account')?['Name']}@__TENANT_DOMAIN__",
+                                            "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                        }
+                                    }
+                                },
+                                "Parse_C4_NoURL": {
+                                    "runAfter": { "Call_C4_NoURL": ["Succeeded"] },
+                                    "type": "ParseJson",
+                                    "inputs": {
+                                        "content": "@body('Call_C4_NoURL')",
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "UserPrincipalName": { "type": "string" },
+                                                "DisplayName": { "type": "string" },
+                                                "EntraRiskLevel": { "type": "string" },
+                                                "InvestigationPriority": { "type": "integer" },
+                                                "IsPrivilegedAccount": { "type": "boolean" },
+                                                "EscalateToSOC": { "type": "boolean" },
+                                                "EarlyExit": { "type": "boolean" }
+                                            }
+                                        }
+                                    }
+                                },
+                                "Append_NoURL_Result": {
+                                    "runAfter": { "Parse_C4_NoURL": ["Succeeded", "Failed"] },
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "URLResults",
+                                        "value": {
+                                            "UserPrincipalName": "@{items('For_each_Account')?['Name']}@__TENANT_DOMAIN__",
+                                            "ClickedURL": null,
+                                            "URLSource": null,
+                                            "ClickTime": null,
+                                            "URLThreatLevel": "Unknown",
+                                            "IsMalicious": false,
+                                            "PostClickSignInFound": false,
+                                            "PostClickSignInCount": 0,
+                                            "PostClickSignInIP": null,
+                                            "PostClickSignInLocation": null,
+                                            "PostClickSignInApp": null,
+                                            "EntraRiskLevel": "@{coalesce(body('Parse_C4_NoURL')?['EntraRiskLevel'], 'none')}",
+                                            "InvestigationPriority": "@{coalesce(body('Parse_C4_NoURL')?['InvestigationPriority'], 0)}",
+                                            "IsPrivilegedAccount": "@{coalesce(body('Parse_C4_NoURL')?['IsPrivilegedAccount'], false)}",
+                                            "EscalateToSOC": "@{coalesce(body('Parse_C4_NoURL')?['EscalateToSOC'], false)}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "Assess_Risk": {
+                "runAfter": {
+                    "For_each_Account": ["Succeeded", "Failed", "Skipped"]
+                },
+                "type": "If",
+                "expression": {
+                    "and": [
+                        { "equals": ["@variables('HasMaliciousURL')", true] },
+                        { "equals": ["@variables('HasPostClickSignIn')", true] }
+                    ]
+                },
+                "actions": {
+                    "Update_Incident_High": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                            "method": "put",
+                            "body": {
+                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                "severity": "High",
+                                "status": "Active"
+                            },
+                            "path": "/Incidents"
+                        }
+                    },
+                    "Call_C6_Notify_Teams": {
+                        "runAfter": { "Update_Incident_High": ["Succeeded"] },
+                        "type": "Http",
+                        "inputs": {
+                            "uri": "__C6_TRIGGER_URL__",
+                            "method": "POST",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "IncidentId": "@{triggerBody()?['object']?['id']}",
+                                "IncidentTitle": "@{triggerBody()?['object']?['properties']?['title']}",
+                                "Severity": "High",
+                                "UserPrincipalName": "@{first(variables('URLResults'))?['UserPrincipalName']}",
+                                "ClickedURL": "@{first(variables('URLResults'))?['ClickedURL']}",
+                                "URLThreatLevel": "@{first(variables('URLResults'))?['URLThreatLevel']}",
+                                "PostClickSignInIP": "@{first(variables('URLResults'))?['PostClickSignInIP']}",
+                                "PostClickSignInLocation": "@{first(variables('URLResults'))?['PostClickSignInLocation']}"
+                            }
+                        }
+                    },
+                    "Add_Comment_Critical": {
+                        "runAfter": { "Call_C6_Notify_Teams": ["Succeeded", "Failed"] },
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                            "method": "post",
+                            "body": {
+                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                "message": "<p><strong>[P2 URL Click + Sign-In Correlation — CRITICAL]</strong><br>\nUser: @{first(variables('URLResults'))?['UserPrincipalName']} | EntraRisk: @{first(variables('URLResults'))?['EntraRiskLevel']} | IsPrivileged: @{first(variables('URLResults'))?['IsPrivilegedAccount']}<br>\nClicked URL: @{first(variables('URLResults'))?['ClickedURL']}<br>\nSource: @{first(variables('URLResults'))?['URLSource']} | Clicked Through: @{first(variables('URLResults'))?['IsClickedThrough']} | Time: @{first(variables('URLResults'))?['ClickTime']}<br>\nURL Threat Level: @{first(variables('URLResults'))?['URLThreatLevel']} | Score: @{first(variables('URLResults'))?['ThreatScore']} | Tags: @{first(variables('URLResults'))?['Tags']}<br>\n<strong>Post-Click Sign-In CONFIRMED</strong> — IP: @{first(variables('URLResults'))?['PostClickSignInIP']} | Location: @{first(variables('URLResults'))?['PostClickSignInLocation']} | App: @{first(variables('URLResults'))?['PostClickSignInApp']}<br>\nInvestigationPriority: @{first(variables('URLResults'))?['InvestigationPriority']}<br>\n<strong>Actions taken: Incident set to High. SOC notified via Teams.</strong></p>"
+                            },
+                            "path": "/Incidents/Comment"
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {
+                        "Check_Malicious_URL_Only": {
+                            "type": "If",
+                            "expression": {
+                                "equals": ["@variables('HasMaliciousURL')", true]
+                            },
+                            "actions": {
+                                "Update_Incident_Medium": {
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                        "method": "put",
+                                        "body": {
+                                            "incidentArmId": "@triggerBody()?['object']?['id']",
+                                            "severity": "Medium",
+                                            "status": "Active"
+                                        },
+                                        "path": "/Incidents"
+                                    }
+                                },
+                                "Add_Comment_Malicious_URL": {
+                                    "runAfter": { "Update_Incident_Medium": ["Succeeded"] },
+                                    "type": "ApiConnection",
+                                    "inputs": {
+                                        "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                        "method": "post",
+                                        "body": {
+                                            "incidentArmId": "@triggerBody()?['object']?['id']",
+                                            "message": "<p><strong>[P2 URL Click + Sign-In Correlation — MALICIOUS URL]</strong><br>\nUser: @{first(variables('URLResults'))?['UserPrincipalName']} | EntraRisk: @{first(variables('URLResults'))?['EntraRiskLevel']}<br>\nClicked URL: @{first(variables('URLResults'))?['ClickedURL']}<br>\nURL Threat Level: @{first(variables('URLResults'))?['URLThreatLevel']} | Score: @{first(variables('URLResults'))?['ThreatScore']} | Tags: @{first(variables('URLResults'))?['Tags']}<br>\nNo post-click sign-in detected within 30-minute window.<br>\nInvestigationPriority: @{first(variables('URLResults'))?['InvestigationPriority']}<br>\nIncident set to Medium. Monitor for credential usage.</p>"
+                                        },
+                                        "path": "/Incidents/Comment"
+                                    }
+                                }
+                            },
+                            "else": {
+                                "actions": {
+                                    "Add_Comment_No_Threat": {
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                            "method": "post",
+                                            "body": {
+                                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                                "message": "<p><strong>[P2 URL Click + Sign-In Correlation]</strong><br>\nUser: @{first(variables('URLResults'))?['UserPrincipalName']}<br>\nNo malicious URL or post-click sign-in detected. URL classified as low risk or no URL associated with this user in the past 2 hours.<br>\nEntraRisk: @{first(variables('URLResults'))?['EntraRiskLevel']} | InvestigationPriority: @{first(variables('URLResults'))?['InvestigationPriority']}<br>\nNo escalation warranted at this time.</p>"
+                                            },
+                                            "path": "/Incidents/Comment"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "azuresentinel": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuresentinel",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuresentinel-P2-UrlClick-SignIn",
+                    "connectionName": "azuresentinel-P2-UrlClick-SignIn",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                },
+                "azuremonitorlogs": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuremonitorlogs",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuremonitorlogs-2",
+                    "connectionName": "azuremonitorlogs-2",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

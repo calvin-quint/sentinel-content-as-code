@@ -1,0 +1,125 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_an_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "URL": { "type": "string" },
+                            "NetworkMessageId": { "type": "string" },
+                            "incidentArmId": { "type": "string" }
+                        },
+                        "required": ["URL"]
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Get_URLScan_Secret": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['keyvault']['connectionId']" } },
+                    "method": "get",
+                    "path": "/secrets/@{encodeURIComponent('URLScan-APIKey')}/value"
+                },
+                "runtimeConfiguration": {
+                    "secureData": { "properties": ["inputs", "outputs"] }
+                }
+            },
+            "HTTP_Submit_Scan": {
+                "runAfter": { "Get_URLScan_Secret": ["Succeeded"] },
+                "type": "Http",
+                "inputs": {
+                    "uri": "https://urlscan.io/api/v1/scan/",
+                    "method": "POST",
+                    "headers": {
+                        "API-Key": "@{body('Get_URLScan_Secret')?['value']}",
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "url": "@{triggerBody()?['URL']}",
+                        "visibility": "unlisted"
+                    }
+                }
+            },
+            "Wait_For_Scan": {
+                "runAfter": { "HTTP_Submit_Scan": ["Succeeded"] },
+                "type": "Wait",
+                "inputs": {
+                    "interval": {
+                        "count": 20,
+                        "unit": "Second"
+                    }
+                }
+            },
+            "HTTP_Get_Result": {
+                "runAfter": { "Wait_For_Scan": ["Succeeded"] },
+                "type": "Http",
+                "inputs": {
+                    "uri": "https://urlscan.io/api/v1/result/@{body('HTTP_Submit_Scan')?['uuid']}/",
+                    "method": "GET",
+                    "headers": {
+                        "API-Key": "@{body('Get_URLScan_Secret')?['value']}"
+                    }
+                }
+            },
+            "Compose_Response": {
+                "runAfter": {
+                    "HTTP_Get_Result": ["Succeeded", "Failed", "TimedOut"]
+                },
+                "type": "Compose",
+                "inputs": {
+                    "URL": "@{triggerBody()?['URL']}",
+                    "NetworkMessageId": "@{coalesce(triggerBody()?['NetworkMessageId'], null)}",
+                    "ScanId": "@{coalesce(body('HTTP_Submit_Scan')?['uuid'], null)}",
+                    "ScanURL": "@{coalesce(body('HTTP_Submit_Scan')?['result'], null)}",
+                    "ScreenshotURL": "@{coalesce(body('HTTP_Get_Result')?['task']?['screenshotURL'], null)}",
+                    "ThreatScore": "@{coalesce(body('HTTP_Get_Result')?['verdicts']?['overall']?['score'], 0)}",
+                    "IsMalicious": "@{coalesce(body('HTTP_Get_Result')?['verdicts']?['overall']?['malicious'], false)}",
+                    "Tags": "@{join(coalesce(body('HTTP_Get_Result')?['verdicts']?['overall']?['tags'], json('[]')), ', ')}",
+                    "Categories": "@{join(coalesce(body('HTTP_Get_Result')?['verdicts']?['overall']?['categories'], json('[]')), ', ')}",
+                    "DomainAge": "@{coalesce(body('HTTP_Get_Result')?['page']?['domain'], null)}",
+                    "FinalURL": "@{coalesce(body('HTTP_Get_Result')?['page']?['url'], triggerBody()?['URL'])}",
+                    "IP": "@{coalesce(body('HTTP_Get_Result')?['page']?['ip'], null)}",
+                    "Country": "@{coalesce(body('HTTP_Get_Result')?['page']?['country'], null)}",
+                    "ASN": "@{coalesce(body('HTTP_Get_Result')?['page']?['asn'], null)}",
+                    "ThreatLevel": "@{if(coalesce(body('HTTP_Get_Result')?['verdicts']?['overall']?['malicious'], false), 'High', if(greaterOrEquals(coalesce(body('HTTP_Get_Result')?['verdicts']?['overall']?['score'], 0), 25), 'Medium', 'Low'))}",
+                    "ScanComplete": "@{not(equals(body('HTTP_Get_Result')?['uuid'], null))}"
+                }
+            },
+            "Response": {
+                "runAfter": { "Compose_Response": ["Succeeded"] },
+                "type": "Response",
+                "kind": "Http",
+                "inputs": {
+                    "statusCode": 200,
+                    "headers": { "Content-Type": "application/json" },
+                    "body": "@outputs('Compose_Response')"
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "keyvault": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/keyvault",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/keyvault",
+                    "connectionName": "keyvault",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

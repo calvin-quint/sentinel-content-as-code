@@ -1,0 +1,163 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_an_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "ipAddress": { "type": "string" },
+                            "incidentArmId": { "type": "string" }
+                        },
+                        "required": ["ipAddress"]
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Get_secret": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['keyvault']['connectionId']" } },
+                    "method": "get",
+                    "path": "/secrets/@{encodeURIComponent('AbuseIPDB-APIKey')}/value"
+                },
+                "runtimeConfiguration": {
+                    "secureData": { "properties": ["inputs", "outputs"] }
+                }
+            },
+            "HTTP_GeoIP": {
+                "runAfter": {},
+                "type": "Http",
+                "inputs": {
+                    "uri": "@{concat('http://ip-api.com/json/', triggerBody()['ipAddress'], '?fields=status,country,countryCode,city,isp,org,as,hosting,proxy,tor')}",
+                    "method": "GET"
+                }
+            },
+            "Run_KQL_ThreatIntel": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                    "method": "post",
+                    "body": {
+                        "query": "let targetIP = '@{triggerBody()['ipAddress']}';\nThreatIntelIndicators\n| where ObservableKey == 'ipv4-addr:value' and ObservableValue == targetIP\n| where IsActive == true\n| top 1 by ConfidenceScore desc\n| project TIPulse = Description, TIConfidence = ConfidenceScore, TISource = SourceSystem",
+                        "timerangetype": "Set in query"
+                    },
+                    "path": "/queryData",
+                    "queries": {
+                        "subscriptions": "__SUBSCRIPTION_ID__",
+                        "resourcegroups": "__RESOURCE_GROUP__",
+                        "resourcetype": "Log Analytics Workspace",
+                        "resourcename": "__WORKSPACE_NAME__",
+                        "timerange": "Last 30 days"
+                    }
+                }
+            },
+            "Run_KQL_TrustedIPs": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                    "method": "post",
+                    "body": {
+                        "query": "let target = '@{triggerBody()['ipAddress']}';\n_GetWatchlist('TrustedIPs')\n| where SearchKey == target or (SearchKey contains '/' and ipv4_is_in_range(target, SearchKey))\n| summarize IsTrusted = count() > 0\n| project IsTrusted",
+                        "timerangetype": "Set in query"
+                    },
+                    "path": "/queryData",
+                    "queries": {
+                        "subscriptions": "__SUBSCRIPTION_ID__",
+                        "resourcegroups": "__RESOURCE_GROUP__",
+                        "resourcetype": "Log Analytics Workspace",
+                        "resourcename": "__WORKSPACE_NAME__",
+                        "timerange": "Last 30 days"
+                    }
+                }
+            },
+            "HTTP_AbuseIPDB": {
+                "runAfter": {
+                    "Get_secret": ["Succeeded"]
+                },
+                "type": "Http",
+                "inputs": {
+                    "uri": "@{concat('https://api.abuseipdb.com/api/v2/check?ipAddress=', triggerBody()['ipAddress'], '&maxAgeInDays=90&verbose')}",
+                    "method": "GET",
+                    "headers": {
+                        "Key": "@{body('Get_secret')?['value']}",
+                        "Accept": "application/json"
+                    }
+                }
+            },
+            "Compose_Response": {
+                "runAfter": {
+                    "HTTP_AbuseIPDB": ["Succeeded", "Failed", "TimedOut"],
+                    "HTTP_GeoIP": ["Succeeded", "Failed", "TimedOut"],
+                    "Run_KQL_ThreatIntel": ["Succeeded", "Failed", "TimedOut"],
+                    "Run_KQL_TrustedIPs": ["Succeeded", "Failed", "TimedOut"]
+                },
+                "type": "Compose",
+                "inputs": {
+                    "IPAddress": "@triggerBody()['ipAddress']",
+                    "Country": "@coalesce(body('HTTP_GeoIP')?['country'], 'Unknown')",
+                    "CountryCode": "@coalesce(body('HTTP_GeoIP')?['countryCode'], coalesce(body('HTTP_AbuseIPDB')?['data']?['countryCode'], 'Unknown'))",
+                    "City": "@coalesce(body('HTTP_GeoIP')?['city'], 'Unknown')",
+                    "ISP": "@coalesce(body('HTTP_GeoIP')?['isp'], coalesce(body('HTTP_AbuseIPDB')?['data']?['isp'], 'Unknown'))",
+                    "ASN": "@coalesce(body('HTTP_GeoIP')?['as'], 'Unknown')",
+                    "IsHostingProvider": "@coalesce(body('HTTP_GeoIP')?['hosting'], false)",
+                    "IsProxy": "@coalesce(body('HTTP_GeoIP')?['proxy'], false)",
+                    "IsTor": "@coalesce(body('HTTP_GeoIP')?['tor'], false)",
+                    "AbuseConfidenceScore": "@coalesce(body('HTTP_AbuseIPDB')?['data']?['abuseConfidenceScore'], 0)",
+                    "TotalReports": "@coalesce(body('HTTP_AbuseIPDB')?['data']?['totalReports'], 0)",
+                    "UsageType": "@coalesce(body('HTTP_AbuseIPDB')?['data']?['usageType'], 'Unknown')",
+                    "LastReportedAt": "@coalesce(body('HTTP_AbuseIPDB')?['data']?['lastReportedAt'], null)",
+                    "TIHit": "@if(greater(length(coalesce(body('Run_KQL_ThreatIntel')?['value'], json('[]'))), 0), true, false)",
+                    "TIPulse": "@coalesce(first(body('Run_KQL_ThreatIntel')?['value'])?['TIPulse'], null)",
+                    "TIConfidence": "@coalesce(first(body('Run_KQL_ThreatIntel')?['value'])?['TIConfidence'], null)",
+                    "TISource": "@coalesce(first(body('Run_KQL_ThreatIntel')?['value'])?['TISource'], null)",
+                    "IsTrusted": "@coalesce(first(body('Run_KQL_TrustedIPs')?['value'])?['IsTrusted'], false)",
+                    "RiskTier": "@if(coalesce(first(body('Run_KQL_TrustedIPs')?['value'])?['IsTrusted'], false), 'Trusted', if(or(greaterOrEquals(coalesce(body('HTTP_AbuseIPDB')?['data']?['abuseConfidenceScore'], 0), 80), greater(length(coalesce(body('Run_KQL_ThreatIntel')?['value'], json('[]'))), 0), equals(coalesce(body('HTTP_GeoIP')?['tor'], false), true)), 'High', if(or(greaterOrEquals(coalesce(body('HTTP_AbuseIPDB')?['data']?['abuseConfidenceScore'], 0), 40), equals(coalesce(body('HTTP_GeoIP')?['hosting'], false), true), equals(coalesce(body('HTTP_GeoIP')?['proxy'], false), true)), 'Medium', 'Low')))"
+                }
+            },
+            "Response": {
+                "runAfter": {
+                    "Compose_Response": ["Succeeded"]
+                },
+                "type": "Response",
+                "kind": "Http",
+                "inputs": {
+                    "statusCode": 200,
+                    "headers": { "Content-Type": "application/json" },
+                    "body": "@outputs('Compose_Response')"
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "keyvault": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/keyvault",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/keyvault",
+                    "connectionName": "keyvault",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                },
+                "azuremonitorlogs": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuremonitorlogs",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuremonitorlogs-1",
+                    "connectionName": "azuremonitorlogs-1",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

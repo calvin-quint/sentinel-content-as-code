@@ -1,0 +1,132 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_an_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "FileHash": { "type": "string" },
+                            "HashType": { "type": "string" },
+                            "incidentArmId": { "type": "string" }
+                        },
+                        "required": ["FileHash"]
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Get_VT_Secret": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['keyvault']['connectionId']" } },
+                    "method": "get",
+                    "path": "/secrets/@{encodeURIComponent('VirusTotal-APIKey')}/value"
+                },
+                "runtimeConfiguration": {
+                    "secureData": { "properties": ["inputs", "outputs"] }
+                }
+            },
+            "HTTP_VT_Lookup": {
+                "runAfter": { "Get_VT_Secret": ["Succeeded"] },
+                "type": "Http",
+                "inputs": {
+                    "uri": "@{concat('https://www.virustotal.com/api/v3/files/', triggerBody()?['FileHash'])}",
+                    "method": "GET",
+                    "headers": {
+                        "x-apikey": "@{body('Get_VT_Secret')?['value']}"
+                    }
+                },
+                "runtimeConfiguration": {
+                    "secureData": { "properties": ["inputs"] }
+                }
+            },
+            "Condition_Hash_Found": {
+                "runAfter": { "HTTP_VT_Lookup": ["Succeeded", "Failed"] },
+                "type": "If",
+                "expression": {
+                    "equals": ["@coalesce(outputs('HTTP_VT_Lookup')?['statusCode'], 0)", 200]
+                },
+                "actions": {
+                    "Compose_Stats": {
+                        "runAfter": {},
+                        "type": "Compose",
+                        "inputs": {
+                            "malicious": "@coalesce(body('HTTP_VT_Lookup')?['data']?['attributes']?['last_analysis_stats']?['malicious'], 0)",
+                            "suspicious": "@coalesce(body('HTTP_VT_Lookup')?['data']?['attributes']?['last_analysis_stats']?['suspicious'], 0)",
+                            "undetected": "@coalesce(body('HTTP_VT_Lookup')?['data']?['attributes']?['last_analysis_stats']?['undetected'], 0)",
+                            "harmless": "@coalesce(body('HTTP_VT_Lookup')?['data']?['attributes']?['last_analysis_stats']?['harmless'], 0)"
+                        }
+                    },
+                    "Response_Found": {
+                        "runAfter": { "Compose_Stats": ["Succeeded"] },
+                        "type": "Response",
+                        "kind": "Http",
+                        "inputs": {
+                            "statusCode": 200,
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "Hash": "@{triggerBody()?['FileHash']}",
+                                "HashType": "@{coalesce(triggerBody()?['HashType'], 'Unknown')}",
+                                "ThreatLevel": "@{if(greaterOrEquals(outputs('Compose_Stats')?['malicious'], 15), 'High', if(greaterOrEquals(outputs('Compose_Stats')?['malicious'], 5), 'Medium', if(greaterOrEquals(outputs('Compose_Stats')?['malicious'], 1), 'Low', 'Clean')))}",
+                                "IsMalicious": "@{greater(outputs('Compose_Stats')?['malicious'], 0)}",
+                                "MaliciousCount": "@{outputs('Compose_Stats')?['malicious']}",
+                                "SuspiciousCount": "@{outputs('Compose_Stats')?['suspicious']}",
+                                "UndetectedCount": "@{outputs('Compose_Stats')?['undetected']}",
+                                "TotalEngines": "@{add(add(add(outputs('Compose_Stats')?['malicious'], outputs('Compose_Stats')?['suspicious']), outputs('Compose_Stats')?['undetected']), outputs('Compose_Stats')?['harmless'])}",
+                                "Permalink": "@{concat('https://www.virustotal.com/gui/file/', body('HTTP_VT_Lookup')?['data']?['id'])}",
+                                "Found": true
+                            }
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {
+                        "Response_NotFound": {
+                            "type": "Response",
+                            "kind": "Http",
+                            "inputs": {
+                                "statusCode": 200,
+                                "headers": { "Content-Type": "application/json" },
+                                "body": {
+                                    "Hash": "@{triggerBody()?['FileHash']}",
+                                    "HashType": "@{coalesce(triggerBody()?['HashType'], 'Unknown')}",
+                                    "ThreatLevel": "Unknown",
+                                    "IsMalicious": false,
+                                    "MaliciousCount": 0,
+                                    "SuspiciousCount": 0,
+                                    "UndetectedCount": 0,
+                                    "TotalEngines": 0,
+                                    "Permalink": null,
+                                    "Found": false
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "keyvault": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/keyvault",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/keyvault-C3",
+                    "connectionName": "keyvault-C3",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

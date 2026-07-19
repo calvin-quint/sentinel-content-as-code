@@ -1,0 +1,303 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "Microsoft_Sentinel_incident": {
+                "type": "ApiConnectionWebhook",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "body": { "callback_url": "@{listCallbackUrl()}" },
+                    "path": "/incident-creation"
+                }
+            }
+        },
+        "actions": {
+            "Initialize_HasCompromisedUser": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "HasCompromisedUser", "type": "boolean", "value": false }] }
+            },
+            "Initialize_UserResults": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "UserResults", "type": "array", "value": [] }] }
+            },
+            "Initialize_UserSummary": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": { "variables": [{ "name": "UserSummary", "type": "string", "value": "" }] }
+            },
+            "Entities_Get_Accounts": {
+                "runAfter": {
+                    "Initialize_HasCompromisedUser": ["Succeeded"],
+                    "Initialize_UserResults": ["Succeeded"],
+                    "Initialize_UserSummary": ["Succeeded"]
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                    "method": "post",
+                    "body": "@triggerBody()?['object']?['properties']?['relatedEntities']",
+                    "path": "/entities/account"
+                }
+            },
+            "For_each_Account": {
+                "runAfter": { "Entities_Get_Accounts": ["Succeeded"] },
+                "type": "Foreach",
+                "operationOptions": "Sequential",
+                "foreach": "@body('Entities_Get_Accounts')?['Accounts']",
+                "actions": {
+                    "Call_C4_Enrich_User": {
+                        "runAfter": {},
+                        "type": "Http",
+                        "inputs": {
+                            "uri": "__C4_TRIGGER_URL__",
+                            "method": "POST",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "UserPrincipalName": "@{concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__')}",
+                                "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                            }
+                        }
+                    },
+                    "KQL_Failed_SignIns": {
+                        "runAfter": {},
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                            "method": "post",
+                            "body": "SigninLogs\n| where TimeGenerated >= ago(2h)\n| where UserPrincipalName =~ '@{concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__')}'\n| where ResultType != 0\n| summarize\n    FailedSignIns = count(),\n    LastFailure = tostring(max(TimeGenerated)),\n    ErrorCodes = tostring(make_set(ResultType, 5))\n| project FailedSignIns, LastFailure, ErrorCodes",
+                            "path": "/queryData",
+                            "queries": {
+                                "subscriptions": "__SUBSCRIPTION_ID__",
+                                "resourcegroups": "__RESOURCE_GROUP__",
+                                "resourcetype": "Log Analytics Workspace",
+                                "resourcename": "__WORKSPACE_NAME__",
+                                "timerange": "Last 2 hours"
+                            }
+                        }
+                    },
+                    "Parse_C4_Response": {
+                        "runAfter": { "Call_C4_Enrich_User": ["Succeeded", "Failed"] },
+                        "type": "ParseJson",
+                        "inputs": {
+                            "content": "@body('Call_C4_Enrich_User')",
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "UserPrincipalName": { "type": "string" },
+                                    "DisplayName": { "type": "string" },
+                                    "Department": { "type": "string" },
+                                    "EntraRiskLevel": { "type": "string" },
+                                    "IsPrivilegedAccount": { "type": "boolean" },
+                                    "EscalateToSOC": { "type": "boolean" },
+                                    "InvestigationPriority": { "type": "integer" },
+                                    "LastSignInLocation": { "type": "string" }
+                                }
+                            }
+                        }
+                    },
+                    "Evaluate_Compromise_Risk": {
+                        "runAfter": {
+                            "Parse_C4_Response": ["Succeeded", "Failed"],
+                            "KQL_Failed_SignIns": ["Succeeded", "Failed"]
+                        },
+                        "type": "If",
+                        "expression": {
+                            "or": [
+                                { "greater": ["@coalesce(first(body('KQL_Failed_SignIns')?['value'])?['FailedSignIns'], 0)", 10] },
+                                { "equals": ["@coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none')", "high"] },
+                                { "equals": ["@coalesce(body('Parse_C4_Response')?['EscalateToSOC'], false)", true] }
+                            ]
+                        },
+                        "actions": {
+                            "Set_HasCompromisedUser": {
+                                "runAfter": {},
+                                "type": "SetVariable",
+                                "inputs": { "name": "HasCompromisedUser", "value": true }
+                            },
+                            "Call_C10_Revoke": {
+                                "runAfter": { "Set_HasCompromisedUser": ["Succeeded"] },
+                                "type": "Http",
+                                "inputs": {
+                                    "uri": "__C10_TRIGGER_URL__",
+                                    "method": "POST",
+                                    "headers": { "Content-Type": "application/json" },
+                                    "body": {
+                                        "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                        "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                    }
+                                }
+                            },
+                            "If_Privileged_Disable": {
+                                "runAfter": { "Call_C10_Revoke": ["Succeeded", "Failed"] },
+                                "type": "If",
+                                "expression": {
+                                    "equals": ["@coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false)", true]
+                                },
+                                "actions": {
+                                    "Call_C7_Disable": {
+                                        "type": "Http",
+                                        "inputs": {
+                                            "uri": "__C7_TRIGGER_URL__",
+                                            "method": "POST",
+                                            "headers": { "Content-Type": "application/json" },
+                                            "body": {
+                                                "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                                "Reason": "Privileged account shows account compromise indicators — automated disable via P5-AccountCompromise",
+                                                "incidentArmId": "@{triggerBody()?['object']?['id']}"
+                                            }
+                                        }
+                                    }
+                                },
+                                "else": { "actions": {} }
+                            },
+                            "Append_UserResult_Compromised": {
+                                "runAfter": { "If_Privileged_Disable": ["Succeeded"] },
+                                "type": "AppendToArrayVariable",
+                                "inputs": {
+                                    "name": "UserResults",
+                                    "value": {
+                                        "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                        "DisplayName": "@{coalesce(body('Parse_C4_Response')?['DisplayName'], '')}",
+                                        "Compromised": true,
+                                        "FailedSignIns": "@{coalesce(first(body('KQL_Failed_SignIns')?['value'])?['FailedSignIns'], 0)}",
+                                        "LastFailure": "@{coalesce(first(body('KQL_Failed_SignIns')?['value'])?['LastFailure'], '')}",
+                                        "ErrorCodes": "@{coalesce(first(body('KQL_Failed_SignIns')?['value'])?['ErrorCodes'], '')}",
+                                        "EntraRiskLevel": "@{coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none')}",
+                                        "IsPrivilegedAccount": "@{coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false)}"
+                                    }
+                                }
+                            },
+                            "Append_UserSummary_Compromised": {
+                                "runAfter": { "Append_UserResult_Compromised": ["Succeeded"] },
+                                "type": "AppendToStringVariable",
+                                "inputs": {
+                                    "name": "UserSummary",
+                                    "value": "@{concat('<b>User (COMPROMISE INDICATORS):</b> ', coalesce(body('Parse_C4_Response')?['UserPrincipalName'], ''), '<br>Failed Sign-Ins (2h): ', coalesce(first(body('KQL_Failed_SignIns')?['value'])?['FailedSignIns'], 0), ' | Entra Risk: ', coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none'), ' | Privileged: ', coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false), '<br>Action: Sessions revoked', if(coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false), ' + Account disabled', ''), '<br><br>')}"
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {
+                                "Append_UserResult_Normal": {
+                                    "runAfter": {},
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "UserResults",
+                                        "value": {
+                                            "UserPrincipalName": "@{coalesce(body('Parse_C4_Response')?['UserPrincipalName'], concat(items('For_each_Account')?['Name'], '@__TENANT_DOMAIN__'))}",
+                                            "DisplayName": "@{coalesce(body('Parse_C4_Response')?['DisplayName'], '')}",
+                                            "Compromised": false,
+                                            "FailedSignIns": "@{coalesce(first(body('KQL_Failed_SignIns')?['value'])?['FailedSignIns'], 0)}",
+                                            "EntraRiskLevel": "@{coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none')}",
+                                            "IsPrivilegedAccount": "@{coalesce(body('Parse_C4_Response')?['IsPrivilegedAccount'], false)}"
+                                        }
+                                    }
+                                },
+                                "Append_UserSummary_Normal": {
+                                    "runAfter": { "Append_UserResult_Normal": ["Succeeded"] },
+                                    "type": "AppendToStringVariable",
+                                    "inputs": {
+                                        "name": "UserSummary",
+                                        "value": "@{concat('<b>User:</b> ', coalesce(body('Parse_C4_Response')?['UserPrincipalName'], ''), ' | Failed Sign-Ins (2h): ', coalesce(first(body('KQL_Failed_SignIns')?['value'])?['FailedSignIns'], 0), ' | Entra Risk: ', coalesce(body('Parse_C4_Response')?['EntraRiskLevel'], 'none'), ' — No compromise threshold met<br><br>')}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "Check_Compromise": {
+                "runAfter": { "For_each_Account": ["Succeeded", "Failed", "Skipped"] },
+                "type": "If",
+                "expression": { "equals": ["@variables('HasCompromisedUser')", true] },
+                "actions": {
+                    "Update_Incident_High": {
+                        "runAfter": {},
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                            "method": "put",
+                            "body": {
+                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                "severity": "High",
+                                "status": "Active"
+                            },
+                            "path": "/Incidents"
+                        }
+                    },
+                    "Call_C6_Notify_Teams": {
+                        "runAfter": { "Update_Incident_High": ["Succeeded", "Failed"] },
+                        "type": "Http",
+                        "inputs": {
+                            "uri": "__C6_TRIGGER_URL__",
+                            "method": "POST",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "IncidentTitle": "@{coalesce(triggerBody()?['object']?['properties']?['title'], 'Account Compromise Detected')}",
+                                "Severity": "High",
+                                "IncidentId": "@{coalesce(triggerBody()?['object']?['properties']?['incidentNumber'], '')}",
+                                "IncidentUrl": "@{coalesce(triggerBody()?['object']?['properties']?['incidentUrl'], '')}",
+                                "AlertDetails": "@{concat(length(variables('UserResults')), ' account(s) analyzed. Compromise indicators detected (high Entra risk, brute-force, or UEBA escalation). Sessions revoked; privileged accounts disabled where applicable. Immediate investigation required.')}"
+                            }
+                        }
+                    },
+                    "Add_Comment_Compromised": {
+                        "runAfter": { "Call_C6_Notify_Teams": ["Succeeded", "Failed"] },
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                            "method": "post",
+                            "body": {
+                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                "message": "<p><strong>[P5 Account Compromise — COMPROMISE INDICATORS DETECTED]</strong><br>\nAccounts analyzed: @{length(variables('UserResults'))}<br><br>\n@{variables('UserSummary')}<strong>Actions taken:</strong> Sessions revoked for compromised accounts. Privileged accounts disabled. SOC notified via Teams. Incident severity set to High.<br><br>\n<strong>Recommended next steps:</strong> Validate compromise, perform credential reset, review all recent activity, and check for lateral movement or data exfiltration.</p>"
+                            },
+                            "path": "/Incidents/Comment"
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {
+                        "Add_Comment_No_Compromise": {
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": { "connection": { "name": "@parameters('$connections')['azuresentinel']['connectionId']" } },
+                                "method": "post",
+                                "body": {
+                                    "incidentArmId": "@triggerBody()?['object']?['id']",
+                                    "message": "<p><strong>[P5 Account Compromise]</strong><br>\nAccounts analyzed: @{length(variables('UserResults'))}<br>\nNo compromise thresholds met. Failed sign-in counts below threshold, Entra risk not elevated, and no UEBA escalation for any account in this incident.<br><br>\n@{variables('UserSummary')}</p>"
+                                },
+                                "path": "/Incidents/Comment"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "azuresentinel": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuresentinel",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuresentinel-P5-AccountCompromise",
+                    "connectionName": "azuresentinel-P5-AccountCompromise",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                },
+                "azuremonitorlogs": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuremonitorlogs",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuremonitorlogs-P5",
+                    "connectionName": "azuremonitorlogs-P5",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

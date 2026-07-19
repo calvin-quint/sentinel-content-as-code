@@ -1,0 +1,159 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_an_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "IncidentId": { "type": "string" },
+                            "UserPrincipalName": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Query_UrlClickEvents": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                    "method": "post",
+                    "body": {
+                        "query": "UrlClickEvents\n| where AccountUpn =~ '@{triggerBody()?['UserPrincipalName']}'\n| where Timestamp > ago(2h)\n| top 1 by Timestamp desc\n| project ClickedURL = Url, NetworkMessageId, IsClickedThrough, ClickTime = Timestamp",
+                        "timerangetype": "Set in query"
+                    },
+                    "path": "/queryData",
+                    "queries": {
+                        "subscriptions": "__SUBSCRIPTION_ID__",
+                        "resourcegroups": "__RESOURCE_GROUP__",
+                        "resourcetype": "Log Analytics Workspace",
+                        "resourcename": "__WORKSPACE_NAME__",
+                        "timerange": "Last 2 hours"
+                    }
+                }
+            },
+            "Query_EmailUrlInfo": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                    "method": "post",
+                    "body": {
+                        "query": "EmailEvents\n| where RecipientEmailAddress =~ '@{triggerBody()?['UserPrincipalName']}'\n| where Timestamp > ago(2h)\n| join kind=inner (EmailUrlInfo) on NetworkMessageId\n| top 1 by Timestamp desc\n| project ClickedURL = Url, NetworkMessageId, IsClickedThrough = false, ClickTime = Timestamp",
+                        "timerangetype": "Set in query"
+                    },
+                    "path": "/queryData",
+                    "queries": {
+                        "subscriptions": "__SUBSCRIPTION_ID__",
+                        "resourcegroups": "__RESOURCE_GROUP__",
+                        "resourcetype": "Log Analytics Workspace",
+                        "resourcename": "__WORKSPACE_NAME__",
+                        "timerange": "Last 2 hours"
+                    }
+                }
+            },
+            "Evaluate_Results": {
+                "runAfter": {
+                    "Query_UrlClickEvents": ["Succeeded", "Failed"],
+                    "Query_EmailUrlInfo": ["Succeeded", "Failed"]
+                },
+                "type": "If",
+                "expression": {
+                    "greater": ["@length(coalesce(body('Query_UrlClickEvents')?['value'], json('[]')))", 0]
+                },
+                "actions": {
+                    "Response_UrlClickEvents": {
+                        "type": "Response",
+                        "inputs": {
+                            "statusCode": 200,
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "ClickedURL": "@{body('Query_UrlClickEvents')?['value']?[0]?['ClickedURL']}",
+                                "NetworkMessageId": "@{body('Query_UrlClickEvents')?['value']?[0]?['NetworkMessageId']}",
+                                "IsClickedThrough": "@{body('Query_UrlClickEvents')?['value']?[0]?['IsClickedThrough']}",
+                                "ClickTime": "@{body('Query_UrlClickEvents')?['value']?[0]?['ClickTime']}",
+                                "URLSource": "UrlClickEvents",
+                                "URLFound": true,
+                                "UserPrincipalName": "@{triggerBody()?['UserPrincipalName']}",
+                                "IncidentId": "@{triggerBody()?['IncidentId']}"
+                            }
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {
+                        "Check_EmailUrlInfo": {
+                            "type": "If",
+                            "expression": {
+                                "greater": ["@length(coalesce(body('Query_EmailUrlInfo')?['value'], json('[]')))", 0]
+                            },
+                            "actions": {
+                                "Response_EmailUrlInfo": {
+                                    "type": "Response",
+                                    "inputs": {
+                                        "statusCode": 200,
+                                        "headers": { "Content-Type": "application/json" },
+                                        "body": {
+                                            "ClickedURL": "@{body('Query_EmailUrlInfo')?['value']?[0]?['ClickedURL']}",
+                                            "NetworkMessageId": "@{body('Query_EmailUrlInfo')?['value']?[0]?['NetworkMessageId']}",
+                                            "IsClickedThrough": false,
+                                            "ClickTime": "@{body('Query_EmailUrlInfo')?['value']?[0]?['ClickTime']}",
+                                            "URLSource": "EmailUrlInfo",
+                                            "URLFound": true,
+                                            "UserPrincipalName": "@{triggerBody()?['UserPrincipalName']}",
+                                            "IncidentId": "@{triggerBody()?['IncidentId']}"
+                                        }
+                                    }
+                                }
+                            },
+                            "else": {
+                                "actions": {
+                                    "Response_No_URL_Found": {
+                                        "type": "Response",
+                                        "inputs": {
+                                            "statusCode": 200,
+                                            "headers": { "Content-Type": "application/json" },
+                                            "body": {
+                                                "ClickedURL": null,
+                                                "NetworkMessageId": null,
+                                                "IsClickedThrough": null,
+                                                "ClickTime": null,
+                                                "URLSource": null,
+                                                "URLFound": false,
+                                                "UserPrincipalName": "@{triggerBody()?['UserPrincipalName']}",
+                                                "IncidentId": "@{triggerBody()?['IncidentId']}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "azuremonitorlogs": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuremonitorlogs",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuremonitorlogs-4",
+                    "connectionName": "azuremonitorlogs-4",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

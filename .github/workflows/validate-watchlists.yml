@@ -1,0 +1,19 @@
+name: Validate Watchlists (PR Check)
+
+on:
+  pull_request:
+    paths:
+      - 'watchlists/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate CSV structure
+        run: python3 scripts/validate-watchlists.py

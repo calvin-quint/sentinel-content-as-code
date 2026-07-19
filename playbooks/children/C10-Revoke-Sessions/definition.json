@@ -1,0 +1,58 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_an_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "UserPrincipalName": { "type": "string" },
+                            "incidentArmId": { "type": "string" }
+                        },
+                        "required": ["UserPrincipalName"]
+                    }
+                }
+            }
+        },
+        "actions": {
+            "HTTP_Revoke_SignIn_Sessions": {
+                "runAfter": {},
+                "type": "Http",
+                "inputs": {
+                    "uri": "https://graph.microsoft.com/v1.0/users/@{triggerBody()?['UserPrincipalName']}/revokeSignInSessions",
+                    "method": "POST",
+                    "authentication": {
+                        "audience": "https://graph.microsoft.com",
+                        "type": "ManagedServiceIdentity"
+                    }
+                }
+            },
+            "Response": {
+                "runAfter": { "HTTP_Revoke_SignIn_Sessions": ["Succeeded", "Failed"] },
+                "type": "Response",
+                "kind": "Http",
+                "inputs": {
+                    "statusCode": 200,
+                    "headers": { "Content-Type": "application/json" },
+                    "body": {
+                        "UserPrincipalName": "@{triggerBody()?['UserPrincipalName']}",
+                        "Success": "@{equals(outputs('HTTP_Revoke_SignIn_Sessions')['statusCode'], 200)}",
+                        "StatusCode": "@{outputs('HTTP_Revoke_SignIn_Sessions')['statusCode']}",
+                        "RevokedAt": "@{utcNow()}"
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": { "type": "Object", "value": {} }
+    }
+}

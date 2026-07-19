@@ -1,0 +1,291 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_an_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "UserPrincipalName": { "type": "string" },
+                            "incidentArmId": { "type": "string" }
+                        },
+                        "required": ["UserPrincipalName"]
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Graph_Get_User_Profile": {
+                "runAfter": {},
+                "type": "Http",
+                "inputs": {
+                    "uri": "https://graph.microsoft.com/v1.0/users/@{triggerBody()?['UserPrincipalName']}?$select=displayName,department,jobTitle,accountEnabled,createdDateTime,userPrincipalName",
+                    "method": "GET",
+                    "authentication": {
+                        "audience": "https://graph.microsoft.com",
+                        "type": "ManagedServiceIdentity"
+                    }
+                }
+            },
+            "Parse_User_Profile": {
+                "runAfter": { "Graph_Get_User_Profile": ["Succeeded"] },
+                "type": "ParseJson",
+                "inputs": {
+                    "content": "@body('Graph_Get_User_Profile')",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "displayName": { "type": "string" },
+                            "department": { "type": "string" },
+                            "jobTitle": { "type": "string" },
+                            "accountEnabled": { "type": "boolean" },
+                            "createdDateTime": { "type": "string" },
+                            "userPrincipalName": { "type": "string" }
+                        }
+                    }
+                }
+            },
+            "Account_Disabled": {
+                "runAfter": { "Parse_User_Profile": ["Succeeded"] },
+                "type": "If",
+                "expression": {
+                    "equals": ["@body('Parse_User_Profile')?['accountEnabled']", false]
+                },
+                "actions": {
+                    "Response_EarlyExit": {
+                        "type": "Response",
+                        "kind": "Http",
+                        "inputs": {
+                            "statusCode": 200,
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                                "UserPrincipalName": "@{triggerBody()?['UserPrincipalName']}",
+                                "DisplayName": "@{body('Parse_User_Profile')?['displayName']}",
+                                "Department": "@{coalesce(body('Parse_User_Profile')?['department'], 'Unknown')}",
+                                "AccountEnabled": false,
+                                "EntraRiskLevel": null,
+                                "EntraRiskState": null,
+                                "LastSignInLocation": null,
+                                "DistinctCountries90d": null,
+                                "InvestigationPriority": null,
+                                "IsServiceAccount": null,
+                                "IsPrivilegedAccount": null,
+                                "DaysSinceLastSignIn": null,
+                                "IsDormant": null,
+                                "EscalateToSOC": false,
+                                "EarlyExit": true
+                            }
+                        }
+                    }
+                },
+                "else": {
+                    "actions": {
+                        "Graph_Get_Manager": {
+                            "runAfter": {},
+                            "type": "Http",
+                            "inputs": {
+                                "uri": "https://graph.microsoft.com/v1.0/users/@{triggerBody()?['UserPrincipalName']}/manager?$select=displayName,mail",
+                                "method": "GET",
+                                "authentication": {
+                                    "audience": "https://graph.microsoft.com",
+                                    "type": "ManagedServiceIdentity"
+                                }
+                            }
+                        },
+                        "Graph_Get_Entra_Risk": {
+                            "runAfter": {},
+                            "type": "Http",
+                            "inputs": {
+                                "uri": "https://graph.microsoft.com/v1.0/identityProtection/riskyUsers?$filter=userPrincipalName eq '@{triggerBody()?['UserPrincipalName']}'",
+                                "method": "GET",
+                                "authentication": {
+                                    "audience": "https://graph.microsoft.com",
+                                    "type": "ManagedServiceIdentity"
+                                }
+                            }
+                        },
+                        "KQL_SigninLogs_History": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                                "method": "post",
+                                "body": {
+                                    "query": "SigninLogs\n| where UserPrincipalName =~ '@{triggerBody()?['UserPrincipalName']}'\n| where TimeGenerated > ago(90d)\n| where ResultType == '0'\n| summarize\n    SuccessfulSignIns = count(),\n    LastSuccessfulSignIn = max(TimeGenerated),\n    CountryBaseline = make_set(tostring(LocationDetails.countryOrRegion), 50),\n    DistinctCountries = dcount(tostring(LocationDetails.countryOrRegion)),\n    MFAUsed = countif(AuthenticationRequirement == 'multiFactorAuthentication'),\n    MFANotRequired = countif(AuthenticationRequirement == 'singleFactorAuthentication'),\n    CANotApplied = countif(ConditionalAccessStatus == 'notApplied'),\n    DeviceCodeCount = countif(AuthenticationProtocol == 'deviceCode'),\n    UniqueIPs = dcount(IPAddress)\n  by UserPrincipalName\n| extend\n    DaysSinceSuccess = datetime_diff('day', now(), LastSuccessfulSignIn),\n    MFABypassRisk = iff(MFANotRequired > MFAUsed, true, false),\n    HasDeviceCodeActivity = iff(DeviceCodeCount > 0, true, false),\n    IsDormant = iff(datetime_diff('day', now(), LastSuccessfulSignIn) > 90, true, false)",
+                                    "timerangetype": "Set in query"
+                                },
+                                "path": "/queryData",
+                                "queries": {
+                                    "subscriptions": "__SUBSCRIPTION_ID__",
+                                    "resourcegroups": "__RESOURCE_GROUP__",
+                                    "resourcetype": "Log Analytics Workspace",
+                                    "resourcename": "__WORKSPACE_NAME__",
+                                    "timerange": "Set in query"
+                                }
+                            }
+                        },
+                        "KQL_IdentityInfo": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                                "method": "post",
+                                "body": {
+                                    "query": "IdentityInfo\n| where AccountUpn =~ '@{triggerBody()?['UserPrincipalName']}'\n| where TimeGenerated > ago(14d)\n| summarize arg_max(TimeGenerated, *) by AccountUpn\n| project\n    City,\n    Country,\n    CriticalityLevel,\n    PrivilegedEntraPimRoles,\n    AssignedRoles,\n    GroupMembership,\n    RiskLevel,\n    RiskScore",
+                                    "timerangetype": "Set in query"
+                                },
+                                "path": "/queryData",
+                                "queries": {
+                                    "subscriptions": "__SUBSCRIPTION_ID__",
+                                    "resourcegroups": "__RESOURCE_GROUP__",
+                                    "resourcetype": "Log Analytics Workspace",
+                                    "resourcename": "__WORKSPACE_NAME__",
+                                    "timerange": "Set in query"
+                                }
+                            }
+                        },
+                        "KQL_UEBA": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                                "method": "post",
+                                "body": {
+                                    "query": "BehaviorAnalytics\n| where UserPrincipalName =~ '@{triggerBody()?['UserPrincipalName']}'\n| where TimeGenerated > ago(7d)\n| top 1 by TimeGenerated desc\n| project\n    InvestigationPriority,\n    ActivityInsights,\n    BlastRadius = UserBlastRadius",
+                                    "timerangetype": "Set in query"
+                                },
+                                "path": "/queryData",
+                                "queries": {
+                                    "subscriptions": "__SUBSCRIPTION_ID__",
+                                    "resourcegroups": "__RESOURCE_GROUP__",
+                                    "resourcetype": "Log Analytics Workspace",
+                                    "resourcename": "__WORKSPACE_NAME__",
+                                    "timerange": "Set in query"
+                                }
+                            }
+                        },
+                        "KQL_Watchlists": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                                "method": "post",
+                                "body": {
+                                    "query": "let svcAccts = toscalar(_GetWatchlist('ServiceAccounts') | where isnotempty(SearchKey) | summarize make_set(SearchKey));\nlet privAccts = toscalar(_GetWatchlist('PrivilegedAccounts') | where isnotempty(SearchKey) | summarize make_set(SearchKey));\nprint\n    IsServiceAccount = ('@{triggerBody()?['UserPrincipalName']}' in~ (svcAccts)),\n    IsPrivilegedAccount = ('@{triggerBody()?['UserPrincipalName']}' in~ (privAccts))",
+                                    "timerangetype": "Set in query"
+                                },
+                                "path": "/queryData",
+                                "queries": {
+                                    "subscriptions": "__SUBSCRIPTION_ID__",
+                                    "resourcegroups": "__RESOURCE_GROUP__",
+                                    "resourcetype": "Log Analytics Workspace",
+                                    "resourcename": "__WORKSPACE_NAME__",
+                                    "timerange": "Set in query"
+                                }
+                            }
+                        },
+                        "KQL_Prior_Incidents": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                                "method": "post",
+                                "body": {
+                                    "query": "SecurityIncident\n| where TimeGenerated > ago(30d)\n| where Entities has '@{triggerBody()?['UserPrincipalName']}'\n| summarize PriorIncidentCount = count(), LastIncidentTitle = arg_max(TimeGenerated, Title)\n| project PriorIncidentCount, LastIncidentTitle",
+                                    "timerangetype": "Set in query"
+                                },
+                                "path": "/queryData",
+                                "queries": {
+                                    "subscriptions": "__SUBSCRIPTION_ID__",
+                                    "resourcegroups": "__RESOURCE_GROUP__",
+                                    "resourcetype": "Log Analytics Workspace",
+                                    "resourcename": "__WORKSPACE_NAME__",
+                                    "timerange": "Set in query"
+                                }
+                            }
+                        },
+                        "Compute_AccountAgeDays": {
+                            "runAfter": {
+                                "Graph_Get_Manager": ["Succeeded", "Failed", "TimedOut"],
+                                "Graph_Get_Entra_Risk": ["Succeeded", "Failed", "TimedOut"],
+                                "KQL_SigninLogs_History": ["Succeeded", "Failed", "TimedOut"],
+                                "KQL_IdentityInfo": ["Succeeded", "Failed", "TimedOut"],
+                                "KQL_UEBA": ["Succeeded", "Failed", "TimedOut"],
+                                "KQL_Watchlists": ["Succeeded", "Failed", "TimedOut"],
+                                "KQL_Prior_Incidents": ["Succeeded", "Failed", "TimedOut"]
+                            },
+                            "type": "Compose",
+                            "inputs": "@div(sub(ticks(utcNow()), ticks(body('Parse_User_Profile')?['createdDateTime'])), 864000000000)"
+                        },
+                        "Compose_Response": {
+                            "runAfter": { "Compute_AccountAgeDays": ["Succeeded"] },
+                            "type": "Compose",
+                            "inputs": {
+                                "UserPrincipalName": "@{triggerBody()?['UserPrincipalName']}",
+                                "DisplayName": "@{coalesce(body('Parse_User_Profile')?['displayName'], 'Unknown')}",
+                                "Department": "@{coalesce(body('Parse_User_Profile')?['department'], first(body('KQL_IdentityInfo')?['value'])?['Department'], 'Unknown')}",
+                                "JobTitle": "@{coalesce(body('Parse_User_Profile')?['jobTitle'], 'Unknown')}",
+                                "AccountEnabled": "@{body('Parse_User_Profile')?['accountEnabled']}",
+                                "AccountAgeDays": "@{outputs('Compute_AccountAgeDays')}",
+                                "ManagerName": "@{coalesce(body('Graph_Get_Manager')?['displayName'], 'Unknown')}",
+                                "ManagerEmail": "@{coalesce(body('Graph_Get_Manager')?['mail'], null)}",
+                                "EntraRiskLevel": "@{coalesce(first(body('Graph_Get_Entra_Risk')?['value'])?['riskLevel'], 'none')}",
+                                "EntraRiskState": "@{coalesce(first(body('Graph_Get_Entra_Risk')?['value'])?['riskState'], 'unknown')}",
+                                "LastSignInLocation": "@{if(greater(length(coalesce(body('KQL_IdentityInfo')?['value'], json('[]'))), 0), concat(coalesce(first(body('KQL_IdentityInfo')?['value'])?['City'], 'Unknown'), ', ', coalesce(first(body('KQL_IdentityInfo')?['value'])?['Country'], 'Unknown')), 'Unknown')}",
+                                "DistinctCountries90d": "@{coalesce(first(body('KQL_SigninLogs_History')?['value'])?['DistinctCountries'], 0)}",
+                                "CountryBaseline": "@{coalesce(first(body('KQL_SigninLogs_History')?['value'])?['CountryBaseline'], json('[]'))}",
+                                "DaysSinceLastSignIn": "@{coalesce(first(body('KQL_SigninLogs_History')?['value'])?['DaysSinceSuccess'], 999)}",
+                                "IsDormant": "@{coalesce(first(body('KQL_SigninLogs_History')?['value'])?['IsDormant'], true)}",
+                                "MFABypassRisk": "@{coalesce(first(body('KQL_SigninLogs_History')?['value'])?['MFABypassRisk'], false)}",
+                                "HasDeviceCodeActivity": "@{coalesce(first(body('KQL_SigninLogs_History')?['value'])?['HasDeviceCodeActivity'], false)}",
+                                "InvestigationPriority": "@{coalesce(first(body('KQL_UEBA')?['value'])?['InvestigationPriority'], 0)}",
+                                "ActivityInsights": "@{coalesce(first(body('KQL_UEBA')?['value'])?['ActivityInsights'], '')}",
+                                "BlastRadius": "@{coalesce(first(body('KQL_UEBA')?['value'])?['BlastRadius'], 'Unknown')}",
+                                "IsServiceAccount": "@{coalesce(first(body('KQL_Watchlists')?['value'])?['IsServiceAccount'], false)}",
+                                "IsPrivilegedAccount": "@{coalesce(first(body('KQL_Watchlists')?['value'])?['IsPrivilegedAccount'], false)}",
+                                "CriticalityLevel": "@{coalesce(first(body('KQL_IdentityInfo')?['value'])?['CriticalityLevel'], 'Unknown')}",
+                                "PrivilegedEntraPimRoles": "@{coalesce(first(body('KQL_IdentityInfo')?['value'])?['PrivilegedEntraPimRoles'], json('[]'))}",
+                                "PriorIncidentCount": "@{coalesce(first(body('KQL_Prior_Incidents')?['value'])?['PriorIncidentCount'], 0)}",
+                                "LastIncidentTitle": "@{coalesce(first(body('KQL_Prior_Incidents')?['value'])?['LastIncidentTitle'], '')}",
+                                "NewAccount": "@{less(int(outputs('Compute_AccountAgeDays')), 30)}",
+                                "EscalateToSOC": "@{or(equals(coalesce(first(body('Graph_Get_Entra_Risk')?['value'])?['riskLevel'], 'none'), 'high'), or(greater(coalesce(first(body('KQL_UEBA')?['value'])?['InvestigationPriority'], 0), 6), coalesce(first(body('KQL_Watchlists')?['value'])?['IsPrivilegedAccount'], false)))}",
+                                "EarlyExit": false
+                            }
+                        },
+                        "Response": {
+                            "runAfter": { "Compose_Response": ["Succeeded"] },
+                            "type": "Response",
+                            "kind": "Http",
+                            "inputs": {
+                                "statusCode": 200,
+                                "headers": { "Content-Type": "application/json" },
+                                "body": "@outputs('Compose_Response')"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "azuremonitorlogs": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuremonitorlogs",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuremonitorlogs-1",
+                    "connectionName": "azuremonitorlogs-1",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

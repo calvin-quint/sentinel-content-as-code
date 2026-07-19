@@ -1,0 +1,118 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_an_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "IncidentTitle": { "type": "string" },
+                            "Severity": { "type": "string" },
+                            "AlertDetails": { "type": "string" },
+                            "IncidentUrl": { "type": "string" },
+                            "IncidentId": { "type": "string" }
+                        },
+                        "required": ["IncidentTitle"]
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Get_Teams_Webhook": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['keyvault']['connectionId']" } },
+                    "method": "get",
+                    "path": "/secrets/@{encodeURIComponent('Teams-SOC-Webhook')}/value"
+                },
+                "runtimeConfiguration": {
+                    "secureData": { "properties": ["inputs", "outputs"] }
+                }
+            },
+            "Compose_ThemeColor": {
+                "runAfter": {},
+                "type": "Compose",
+                "inputs": "@if(equals(triggerBody()?['Severity'], 'High'), 'FF0000', if(equals(triggerBody()?['Severity'], 'Medium'), 'FFA500', if(equals(triggerBody()?['Severity'], 'Low'), 'FFD700', '0078D4')))"
+            },
+            "HTTP_Send_Teams": {
+                "runAfter": {
+                    "Get_Teams_Webhook": ["Succeeded"],
+                    "Compose_ThemeColor": ["Succeeded"]
+                },
+                "type": "Http",
+                "inputs": {
+                    "uri": "@body('Get_Teams_Webhook')?['value']",
+                    "method": "POST",
+                    "headers": { "Content-Type": "application/json" },
+                    "body": {
+                        "@type": "MessageCard",
+                        "@context": "http://schema.org/extensions",
+                        "themeColor": "@{outputs('Compose_ThemeColor')}",
+                        "summary": "@{concat('SOC Alert: ', coalesce(triggerBody()?['IncidentTitle'], 'Security Incident'))}",
+                        "sections": [
+                            {
+                                "activityTitle": "Microsoft Sentinel - SOC Alert",
+                                "activitySubtitle": "@{coalesce(triggerBody()?['IncidentTitle'], 'Security Incident')}",
+                                "facts": [
+                                    { "name": "Severity", "value": "@{coalesce(triggerBody()?['Severity'], 'Unknown')}" },
+                                    { "name": "Incident ID", "value": "@{coalesce(triggerBody()?['IncidentId'], 'N/A')}" },
+                                    { "name": "Details", "value": "@{coalesce(triggerBody()?['AlertDetails'], 'No details provided.')}" },
+                                    { "name": "Time (UTC)", "value": "@{utcNow()}" }
+                                ],
+                                "markdown": false
+                            }
+                        ],
+                        "potentialAction": [
+                            {
+                                "@type": "OpenUri",
+                                "name": "View Incident in Sentinel",
+                                "targets": [
+                                    {
+                                        "os": "default",
+                                        "uri": "@{coalesce(triggerBody()?['IncidentUrl'], 'https://portal.azure.com/#blade/Microsoft_Azure_Security_Insights/MainMenuBlade')}"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            },
+            "Response": {
+                "runAfter": { "HTTP_Send_Teams": ["Succeeded", "Failed"] },
+                "type": "Response",
+                "kind": "Http",
+                "inputs": {
+                    "statusCode": 200,
+                    "headers": { "Content-Type": "application/json" },
+                    "body": {
+                        "Success": "@{equals(outputs('HTTP_Send_Teams')['statusCode'], 200)}",
+                        "StatusCode": "@{outputs('HTTP_Send_Teams')['statusCode']}",
+                        "SentAt": "@{utcNow()}"
+                    }
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "keyvault": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/keyvault",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/keyvault-C6",
+                    "connectionName": "keyvault-C6",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}

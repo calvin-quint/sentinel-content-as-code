@@ -1,0 +1,97 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "Recurrence": {
+                "recurrence": {
+                    "frequency": "Minute",
+                    "interval": 15,
+                    "timeZone": "Central Standard Time",
+                    "startTime": "2026-06-25T19:00:00Z"
+                },
+                "type": "Recurrence"
+            }
+        },
+        "actions": {
+            "Run_query_and_list_results": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": { "connection": { "name": "@parameters('$connections')['azuremonitorlogs']['connectionId']" } },
+                    "method": "post",
+                    "body": "AuditLogs\n| where TimeGenerated >= ago(15m)\n| where ActivityDisplayName == 'Disable account'\n| where InitiatedBy.app.displayName contains '__SYNC_APP_NAME__'\n| where Result == 'success'\n| extend\n    TargetUser = tostring(TargetResources[0].userPrincipalName),\n    UserDisplayName = tostring(TargetResources[0].displayName)\n| mv-expand ModifiedProperties = TargetResources[0].modifiedProperties\n| extend\n    PropertyName = tostring(ModifiedProperties.displayName),\n    OldValue = tostring(ModifiedProperties.oldValue),\n    NewValue = tostring(ModifiedProperties.newValue)\n| where PropertyName == 'AccountEnabled'\n| where OldValue contains 'true' and NewValue contains 'false'\n| summarize\n    TimeGenerated = max(TimeGenerated),\n    UserDisplayName = take_any(UserDisplayName),\n    InitiatedByApp = take_any(tostring(InitiatedBy.app.displayName)),\n    Result = take_any(Result)\n  by CorrelationId, TargetUser\n| project\n    TimeGenerated,\n    TargetUser,\n    UserDisplayName,\n    InitiatedByApp,\n    Result,\n    CorrelationId",
+                    "path": "/queryData",
+                    "queries": {
+                        "subscriptions": "__SUBSCRIPTION_ID__",
+                        "resourcegroups": "__RESOURCE_GROUP__",
+                        "resourcetype": "Log Analytics Workspace",
+                        "resourcename": "__WORKSPACE_NAME__",
+                        "timerange": "Last 30 minutes"
+                    }
+                }
+            },
+            "Condition_Results_Found": {
+                "runAfter": { "Run_query_and_list_results": ["Succeeded"] },
+                "type": "If",
+                "expression": {
+                    "greater": ["@length(coalesce(body('Run_query_and_list_results')?['value'], json('[]')))", 0]
+                },
+                "actions": {
+                    "For_each_disabled_account": {
+                        "runAfter": {},
+                        "type": "Foreach",
+                        "foreach": "@body('Run_query_and_list_results')?['value']",
+                        "actions": {
+                            "Send_email_to_SD": {
+                                "type": "Http",
+                                "inputs": {
+                                    "uri": "https://graph.microsoft.com/v1.0/users/__AUTOMATION_SENDER_UPN__/sendMail",
+                                    "method": "POST",
+                                    "headers": { "Content-Type": "application/json" },
+                                    "body": {
+                                        "message": {
+                                            "subject": "Syncer disabled user account: @{items('For_each_disabled_account')?['TargetUser']}",
+                                            "body": {
+                                                "contentType": "HTML",
+                                                "content": "<b>Affected User:</b> @{items('For_each_disabled_account')?['TargetUser']}<br/><b>Display Name:</b> @{items('For_each_disabled_account')?['UserDisplayName']}<br/><b>Initiated By:</b> @{items('For_each_disabled_account')?['InitiatedByApp']}<br/><b>Time:</b> @{items('For_each_disabled_account')?['TimeGenerated']}<br/><b>Result:</b> @{items('For_each_disabled_account')?['Result']}<br/><b>Correlation ID:</b> @{items('For_each_disabled_account')?['CorrelationId']}<br/><br/><b>Notes for Service Desk:</b><br/>Do not re-enable the user account until the root cause of the disablement has been identified and investigated. Accounts may be automatically disabled by Microsoft Defender for Identity or related security controls due to suspected compromise (e.g., impossible travel, credential theft, MFA compromise, reverse proxy phishing). Re-enabling without investigation could expose the organization to further risk."
+                                            },
+                                            "toRecipients": [
+                                                {
+                                                    "emailAddress": { "address": "__SERVICEDESK_EMAIL__" }
+                                                }
+                                            ]
+                                        },
+                                        "saveToSentItems": "false"
+                                    },
+                                    "authentication": {
+                                        "type": "ManagedServiceIdentity",
+                                        "audience": "https://graph.microsoft.com/"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "else": { "actions": {} }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": { "type": "Object", "defaultValue": {} }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "azuremonitorlogs": {
+                    "id": "/subscriptions/__SUBSCRIPTION_ID__/providers/Microsoft.Web/locations/eastus/managedApis/azuremonitorlogs",
+                    "connectionId": "/subscriptions/__SUBSCRIPTION_ID__/resourceGroups/__RESOURCE_GROUP__/providers/Microsoft.Web/connections/azuremonitorlogs-5",
+                    "connectionName": "azuremonitorlogs-5",
+                    "connectionProperties": { "authentication": { "type": "ManagedServiceIdentity" } }
+                }
+            }
+        }
+    }
+}
