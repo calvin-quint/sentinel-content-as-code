@@ -16,6 +16,7 @@ threat_intel:
   campaign: null
   first_seen: null
   references: []
+  yara_rule: null                       # path to yara/<family>/<rule-name>.yar, if a companion artifact-ID rule exists
 validated:
   atomic_test: null                     # Atomic Red Team test ID, if one exists
   atomic_test_url: null                  # direct link to the test in redcanaryco/atomic-red-team

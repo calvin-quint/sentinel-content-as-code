@@ -31,6 +31,11 @@ sigma/
     <rule-name>.yml             # Sigma-authored source for rules where a Sigma→Kusto
                                   # conversion path exists (ASIM-normalized tables today) —
                                   # see sigma/README.md for which rules qualify and why
+yara/
+  <malware-family>/
+    <rule-name>.yar              # artifact-ID rules for named-threat detections —
+                                   # companion to a rule's threat_intel.yara_rule field,
+                                   # see yara/README.md
 playbooks/
   parents/                     # Sentinel-triggered Logic Apps — orchestrate enrichment,
                                  # write incident comments, trigger remediation
