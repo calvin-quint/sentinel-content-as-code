@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Deploy YAML analytics rules to a Microsoft Sentinel workspace.
+"""Deploy Markdown analytics-rule pages to a Microsoft Sentinel workspace.
 
-Validates every rule, converts it to the Sentinel alertRules REST API
+Validates every deployable rule (pages with an `analytics_rule`
+frontmatter block), converts it to the Sentinel alertRules REST API
 body, and PUTs it via `az rest` (relies on an already-authenticated
 Azure CLI session, e.g. from the azure/login GitHub Action with OIDC).
 
@@ -24,7 +25,9 @@ from pathlib import Path
 
 from rule_transform import (
     alert_rule_url,
+    derive_arm_rule,
     find_rule_files,
+    is_deployable,
     load_rule,
     load_schema,
     to_arm_body,
@@ -32,8 +35,8 @@ from rule_transform import (
 )
 
 
-def deploy_rule(rule: dict, url: str, yaml_path: Path) -> None:
-    body = to_arm_body(rule, yaml_path)
+def deploy_rule(arm_rule: dict, url: str) -> None:
+    body = to_arm_body(dict(arm_rule))
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(body, f)
         payload_path = f.name
@@ -69,7 +72,7 @@ def main() -> int:
     schema = load_schema()
     files = find_rule_files(rules_dir)
     if not files:
-        print(f"warning: no YAML rule files found under {rules_dir}")
+        print(f"warning: no rule pages found under {rules_dir}")
         return 0
 
     subscription_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
@@ -86,8 +89,24 @@ def main() -> int:
 
     had_errors = False
     for path in files:
-        rule = load_rule(path)
-        errors = validate_rule(rule, schema, str(path))
+        try:
+            rule = load_rule(path)
+        except Exception as exc:  # noqa: BLE001
+            had_errors = True
+            print(f"skipping {path}: failed to parse frontmatter: {exc}")
+            continue
+
+        if not is_deployable(rule):
+            continue  # hunting/narrative-only page, nothing to deploy
+
+        try:
+            arm_rule = derive_arm_rule(rule, path)
+        except ValueError as exc:
+            had_errors = True
+            print(f"skipping {path}: {exc}")
+            continue
+
+        errors = validate_rule(arm_rule, schema, str(path))
         if errors:
             had_errors = True
             print(f"skipping {path}, validation failed:")
@@ -96,13 +115,13 @@ def main() -> int:
             continue
 
         if dry_run:
-            print(f"[dry-run] would deploy {path} (id={rule['id']}, name={rule['name']!r})")
+            print(f"[dry-run] would deploy {path} (id={arm_rule['id']}, name={arm_rule['name']!r})")
             continue
 
-        url = alert_rule_url(subscription_id, resource_group, workspace_name, rule["id"])
-        print(f"deploying {path} (id={rule['id']}, name={rule['name']!r}) ...", end=" ")
+        url = alert_rule_url(subscription_id, resource_group, workspace_name, arm_rule["id"])
+        print(f"deploying {path} (id={arm_rule['id']}, name={arm_rule['name']!r}) ...", end=" ")
         try:
-            deploy_rule(rule, url, path)
+            deploy_rule(arm_rule, url)
             print("done")
         except RuntimeError as exc:
             had_errors = True

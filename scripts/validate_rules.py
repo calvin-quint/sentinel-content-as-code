@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Validate all YAML analytics rules under a directory against the
-analytics-rule JSON schema, and check for duplicate rule ids.
+"""Validate all Markdown analytics-rule pages under a directory against
+the analytics-rule JSON schema, and check for duplicate rule ids.
+
+Pages with no `analytics_rule` frontmatter block (hunting/lookup pages,
+narrative-only pages) are skipped — they aren't deployable and have
+nothing to validate against this schema.
 
 Usage: validate_rules.py [rules_dir]
 """
@@ -9,7 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from rule_transform import find_rule_files, load_rule, load_schema, resolve_query, validate_rule
+from rule_transform import derive_arm_rule, find_rule_files, is_deployable, load_rule, load_schema, validate_rule
 
 
 def main() -> int:
@@ -21,30 +25,35 @@ def main() -> int:
     schema = load_schema()
     files = find_rule_files(rules_dir)
     if not files:
-        print(f"warning: no YAML rule files found under {rules_dir}")
+        print(f"warning: no rule pages found under {rules_dir}")
         return 0
 
     all_errors: list[str] = []
     seen_ids: dict[str, Path] = {}
+    deployable_count = 0
+    skipped_count = 0
 
     for path in files:
-        rel = path.relative_to(rules_dir.parent.parent) if rules_dir.is_absolute() is False else path
         try:
             rule = load_rule(path)
         except Exception as exc:  # noqa: BLE001
-            all_errors.append(f"{path}: failed to parse YAML: {exc}")
+            all_errors.append(f"{path}: failed to parse frontmatter: {exc}")
             continue
 
-        all_errors.extend(validate_rule(rule, schema, str(path)))
+        if not is_deployable(rule):
+            skipped_count += 1
+            continue
 
+        deployable_count += 1
         try:
-            query_text = resolve_query(rule, path)
-            if not query_text.strip():
-                all_errors.append(f"{path}: resolved query is empty")
+            arm_rule = derive_arm_rule(rule, path)
         except ValueError as exc:
             all_errors.append(str(exc))
+            continue
 
-        rule_id = rule.get("id")
+        all_errors.extend(validate_rule(arm_rule, schema, str(path)))
+
+        rule_id = arm_rule.get("id")
         if rule_id:
             if rule_id in seen_ids:
                 all_errors.append(
@@ -59,7 +68,10 @@ def main() -> int:
             print(f"  - {error}")
         return 1
 
-    print(f"OK: {len(files)} rule(s) validated successfully.")
+    print(
+        f"OK: {deployable_count} deployable rule(s) validated successfully "
+        f"({skipped_count} non-deployable page(s) skipped)."
+    )
     return 0
 
 
