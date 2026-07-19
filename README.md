@@ -26,6 +26,11 @@ hunting/
   <category>/
     <query-name>.md            # saved-search / enrichment queries — same template,
                                  # no `analytics_rule` block, not deployed by this pipeline
+sigma/
+  <category>/
+    <rule-name>.yml             # Sigma-authored source for rules where a Sigma→Kusto
+                                  # conversion path exists (ASIM-normalized tables today) —
+                                  # see sigma/README.md for which rules qualify and why
 playbooks/
   parents/                     # Sentinel-triggered Logic Apps — orchestrate enrichment,
                                  # write incident comments, trigger remediation

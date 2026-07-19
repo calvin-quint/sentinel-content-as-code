@@ -9,6 +9,7 @@ confidence: ""                   # low | medium | high
 status: draft                     # draft | testing | production | deprecated (content lifecycle, distinct from analytics_rule.status)
 platforms: []                      # defender_xdr and/or sentinel — table names differ (Timestamp vs TimeGenerated)
 data_sources: []                    # e.g. [DeviceNetworkEvents, DnsEvents]
+sigma_source: null                    # path to sigma/<category>/<rule-name>.yml if this rule is Sigma-sourced; null if KQL-first
 threat_intel:
   family: null                        # malware/tool family this maps to, if any
   actor: null                          # attributed actor/group, if known
