@@ -1,0 +1,35 @@
+// Query 1 — LSASS access attempts on both devices
+DeviceEvents
+| where DeviceName has_any ("omnia-1272", "omnia-1294")
+| where ActionType has_any ("LsassProcessMemoryReadAttempt", "LsassProcessMemoryBufferAccess", "ReadProcessMemoryApiCall", "CredentialAccess")
+| project Timestamp, DeviceName, ActionType, InitiatingProcessFileName, InitiatingProcessCommandLine, InitiatingProcessAccountName
+| order by Timestamp asc
+
+// Query 2 — ASR audit hits (credential theft rule)
+DeviceEvents
+| where DeviceName has_any ("omnia-1272", "omnia-1294")
+| where ActionType == "AsrLsassCredentialTheftAudited" or ActionType == "AsrLsassCredentialTheftBlocked"
+| project Timestamp, DeviceName, ActionType, InitiatingProcessFileName, InitiatingProcessCommandLine, FileName, FolderPath
+| order by Timestamp asc
+
+// Query 3 — Ditto.exe process activity, both devices, full timeline
+DeviceProcessEvents
+| where DeviceName has_any ("omnia-1272", "omnia-1294")
+| where FileName =~ "Ditto.exe" or InitiatingProcessFileName =~ "Ditto.exe"
+| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine, InitiatingProcessFileName, InitiatingProcessCommandLine
+| order by Timestamp asc
+
+// Draft clipboard-utility detection logic (process-based, not clipboard-behavior-based)
+DeviceProcessEvents
+| where FolderPath has_any (@"\AppData\", @"\ProgramData\", @"\Temp\")
+| where FileName has_any ("ditto.exe", "clipboardfusion.exe", "clcl.exe", "arsclip.exe")
+   or ProcessCommandLine has_any ("GetClipboardData", "clipboard")
+| where InitiatingProcessFileName !in ("explorer.exe")
+| project Timestamp, DeviceName, AccountName, FileName, FolderPath, ProcessCommandLine
+
+// Registry check for clipboard-viewer chain / Ditto persistence
+DeviceRegistryEvents
+| where DeviceName has_any ("omnia-1272", "omnia-1294")
+| where RegistryKey has @"Software\Ditto" or RegistryKey has "ClipboardHistory" or RegistryKey has "Clipboard"
+| project Timestamp, DeviceName, ActionType, RegistryKey, RegistryValueName, InitiatingProcessFileName
+| order by Timestamp asc

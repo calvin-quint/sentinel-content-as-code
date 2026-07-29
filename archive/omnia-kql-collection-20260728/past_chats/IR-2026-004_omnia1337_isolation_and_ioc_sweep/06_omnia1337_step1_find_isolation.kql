@@ -1,0 +1,6 @@
+DeviceEvents
+| where Timestamp > ago(30d)
+| where DeviceName contains "1337"
+| where ActionType has_any ("Isolat", "Contain", "RestrictedInternet", "NetworkProtection", "ConnectionBlocked")
+| project Timestamp, DeviceName, ActionType, AdditionalFields, InitiatingProcessAccountName
+| order by Timestamp asc

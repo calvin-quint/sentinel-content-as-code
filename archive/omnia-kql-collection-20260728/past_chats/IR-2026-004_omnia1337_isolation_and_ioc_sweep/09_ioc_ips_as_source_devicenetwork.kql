@@ -1,0 +1,20 @@
+let IOC_IPs = datatable(ip:string, role:string, first_seen:datetime, status:string)
+[
+    "172.86.126.92",   "Payload hosting (Cloudzy/FranTech bulletproof hosting)",        datetime(2026-07-20), "Confirmed malicious",
+    "172.86.126.250",  "Payload hosting - same /24 block",                             datetime(2026-07-16), "Confirmed malicious",
+    "18.153.106.96",   "C2 beacon (ports 9001-9026)",                                   datetime(2026-07-20), "Confirmed malicious",
+    "216.155.157.161", "NTLM/DFSCoerce coercion sweep source",                          datetime(2026-07-21), "Confirmed malicious",
+    "161.35.5.12",     "NTLM/DFSCoerce coercion sweep source (first wave)",             datetime(2026-07-20), "Confirmed malicious",
+    "188.114.96.3",    "whirow.info primary resolved IP (Cloudflare-fronted)",           datetime(2026-07-26), "New - sandbox discovery, needs sweep",
+    "188.114.97.3",    "whirow.info secondary resolved IP",                             datetime(2026-07-26), "New - sandbox discovery, needs sweep",
+    "172.65.164.225",  "GoDaddy staging IP - low confidence role",                       datetime(2026-07-24), "Unresolved - low confidence",
+    "104.214.78.173",  "Likely legitimate VPN peer",                                    datetime(2026-07-20), "Cleared - false lead"
+];
+DeviceNetworkEvents
+| where Timestamp > ago(30d)
+| where RemoteIP in (IOC_IPs)
+| where ActionType has_any ("InboundConnectionAccepted", "ConnectionRequest", "ListeningConnectionCreated")
+| join kind=inner IOC_IPs on $left.RemoteIP == $right.ip
+| where status !contains "Cleared"
+| project Timestamp, DeviceName, LocalIP, LocalPort, RemoteIP, RemotePort, InitiatingProcessAccountName, InitiatingProcessFileName, ActionType, role, first_seen, status
+| order by Timestamp asc

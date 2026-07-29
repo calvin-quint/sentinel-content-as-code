@@ -1,0 +1,6 @@
+DeviceNetworkEvents
+| where Timestamp > ago(30d)
+| where DeviceName contains "1337"
+| where RemoteIP in ("216.155.157.161", "161.35.5.12")
+| project Timestamp, DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName, RemoteIP, RemotePort, ActionType
+| order by Timestamp asc

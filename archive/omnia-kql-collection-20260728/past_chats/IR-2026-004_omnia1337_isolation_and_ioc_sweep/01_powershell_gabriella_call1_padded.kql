@@ -1,0 +1,10 @@
+// Gabriella - Call 1 (padded, Jul 16)
+DeviceProcessEvents
+| where Timestamp between (datetime(2026-07-16T21:00:48) .. datetime(2026-07-16T21:31:14))
+| where DeviceName contains "1294"
+| where FileName in~ ("powershell.exe", "pwsh.exe")
+| extend InWindow = Timestamp between (datetime(2026-07-16T21:05:48) .. datetime(2026-07-16T21:26:14))
+| extend SecondsFromStart = datetime_diff('second', Timestamp, datetime(2026-07-16T21:05:48))
+| extend SecondsFromEnd   = datetime_diff('second', Timestamp, datetime(2026-07-16T21:26:14))
+| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine, InitiatingProcessFileName, InitiatingProcessCommandLine, InWindow, SecondsFromStart, SecondsFromEnd
+| order by Timestamp asc

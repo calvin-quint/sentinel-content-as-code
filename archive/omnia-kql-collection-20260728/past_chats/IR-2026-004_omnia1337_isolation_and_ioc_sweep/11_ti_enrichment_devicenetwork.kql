@@ -1,0 +1,37 @@
+let TIIndicators = ThreatIntelIndicators
+| where IsDeleted == false
+| where ValidUntil > now()
+| summarize arg_max(TimeGenerated, *) by Id
+| where ObservableKey in (
+    'ipv4-addr:value',
+    'ipv6-addr:value',
+    'network-traffic:src_ref.value',
+    'network-traffic:dst_ref.value'
+  )
+| extend TI_IP = ObservableValue
+| extend TI_ThreatType  = tostring(Data.indicator_types[0])
+| extend TI_Description = tostring(Data.description)
+| summarize
+    TI_ThreatType     = make_set(TI_ThreatType),
+    TI_Confidence     = max(Confidence),
+    TI_Description    = take_any(TI_Description),
+    TI_Sources        = make_set(SourceSystem)
+  by TI_IP;
+DeviceNetworkEvents
+| where Timestamp > ago(30d)
+| join kind=inner (TIIndicators) on $left.RemoteIP == $right.TI_IP
+| project
+    Timestamp,
+    DeviceName,
+    InitiatingProcessAccountName,
+    InitiatingProcessFileName,
+    InitiatingProcessCommandLine,
+    RemoteIP,
+    RemotePort,
+    RemoteUrl,
+    ActionType,
+    TI_ThreatType,
+    TI_Confidence,
+    TI_Description,
+    TI_Sources
+| sort by TI_Confidence desc, Timestamp desc

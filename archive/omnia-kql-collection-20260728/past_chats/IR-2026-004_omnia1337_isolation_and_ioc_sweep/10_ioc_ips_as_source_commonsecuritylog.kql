@@ -1,0 +1,6 @@
+let IOC_IPs = dynamic(["172.86.126.92","172.86.126.250","18.153.106.96","216.155.157.161","161.35.5.12","188.114.96.3","188.114.97.3","172.65.164.225"]);
+CommonSecurityLog
+| where TimeGenerated > ago(30d)
+| where SourceIP in (IOC_IPs)
+| project TimeGenerated, SourceIP, SourcePort, DestinationIP, DestinationPort, DeviceAction, Activity, DeviceVendor, DeviceProduct
+| order by TimeGenerated asc
