@@ -1,7 +1,0 @@
-// ATT&CK: T1059 — Win+R delivery vector (ClickFix)
-DeviceRegistryEvents
-| where RegistryKey has @"Explorer\RunMRU"
-| where Timestamp > ago(48h)
-| project Timestamp, DeviceName, InitiatingProcessAccountName,
-          RegistryKey, RegistryValueName, RegistryValueData
-| order by Timestamp desc

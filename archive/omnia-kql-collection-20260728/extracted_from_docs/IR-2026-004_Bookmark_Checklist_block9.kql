@@ -1,8 +1,0 @@
-DeviceFileEvents
-| where Timestamp > ago(30d)
-| where DeviceName has_any ("omnia-1272", "omnia-1294", "omnia-1337")
-| where FolderPath has_any (@"\ProgramData\", @"\AppData\Local\", @"\AppData\Roaming\")
-| where FileName endswith ".dll"
-| where InitiatingProcessFileName !has "Microsoft" and InitiatingProcessFileName !has "Windows Defender"
-| project Timestamp, DeviceName, FileName, FolderPath, InitiatingProcessFileName
-| order by Timestamp asc

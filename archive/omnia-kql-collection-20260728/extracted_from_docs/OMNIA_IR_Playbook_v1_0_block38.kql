@@ -1,3 +1,0 @@
-// Append to any query to scope by device type
-| where DeviceName startswith "omnia-"    // Corporate devices only
-| where DeviceName startswith "cpc-"      // Contractor DevBox machines only

@@ -1,8 +1,0 @@
-// All devices where file was executed
-DeviceProcessEvents
-| where SHA256 == "<sha256_hash>" or FileName =~ "<filename>"
-| where Timestamp > ago(7d)
-| summarize FirstExecution = min(Timestamp), LastExecution = max(Timestamp),
-            ExecCount = count()
-            by DeviceName, AccountName, FileName, ProcessCommandLine
-| order by FirstExecution asc

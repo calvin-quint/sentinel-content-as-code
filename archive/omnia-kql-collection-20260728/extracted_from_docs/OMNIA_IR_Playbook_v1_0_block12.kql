@@ -1,6 +1,0 @@
-// ATT&CK: T1566.002
-UrlClickEvents
-| where AccountUpn == "<upn>"
-| where Timestamp > ago(72h)
-| project Timestamp, AccountUpn, Url, ActionType, IsClickedThrough, UrlChain
-| order by Timestamp desc

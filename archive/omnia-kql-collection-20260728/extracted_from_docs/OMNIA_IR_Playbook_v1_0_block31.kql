@@ -1,7 +1,0 @@
-// ATT&CK: T1080 / T1204.002
-DeviceFileEvents
-| where SHA256 == "<sha256_hash>"
-| where Timestamp > ago(7d)
-| summarize FirstSeen = min(Timestamp), LastSeen = max(Timestamp), EventCount = count()
-            by DeviceName, FileName, FolderPath, InitiatingProcessAccountName
-| order by FirstSeen asc

@@ -1,8 +1,0 @@
-// ATT&CK: T1550.001 - Use Alternate Auth Material: App Access Token
-SigninLogs
-| where UserPrincipalName == "<upn>"
-| where TimeGenerated > ago(72h)
-| project TimeGenerated, UserPrincipalName, IPAddress, Location,
-          tostring(DeviceDetail), AuthenticationProtocol, IsInteractive,
-          RiskDetail, UserAgent, ConditionalAccessStatus, tostring(MfaDetail)
-| order by TimeGenerated desc

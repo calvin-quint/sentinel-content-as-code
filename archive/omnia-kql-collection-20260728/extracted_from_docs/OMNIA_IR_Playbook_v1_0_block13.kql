@@ -1,5 +1,0 @@
-// Extract domain for TI correlation
-UrlClickEvents
-| where AccountUpn == "<upn>"
-| extend UrlDomain = tostring(parse_url(Url).Host)
-| project Timestamp, AccountUpn, Url, UrlDomain, ActionType, IsClickedThrough
