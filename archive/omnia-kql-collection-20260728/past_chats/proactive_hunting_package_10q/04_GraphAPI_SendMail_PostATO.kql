@@ -1,0 +1,19 @@
+// Source: chat "Proactive threat hunting queries and techniques" (2026-06-29)
+// ATT&CK: T1534 - Internal Spearphishing via Graph API sendMail
+// Requires MicrosoftGraphActivityLogs ingestion (Entra Diagnostic Settings -> Log Analytics)
+// Hunt: sendMail calls from IPs outside the 14-day sign-in baseline
+let SigninBaseline =
+    SigninLogs
+    | where TimeGenerated between (ago(30d) .. ago(1d))
+    | where ResultType == 0
+    | summarize KnownIPs = make_set(IPAddress) by UserPrincipalName;
+MicrosoftGraphActivityLogs
+| where TimeGenerated > ago(14d)
+| where RequestUri has "sendMail"
+| where RequestMethod == "POST"
+| extend UserId = tostring(UserId)
+| join kind=leftouter SigninBaseline on $left.UserId == $right.UserPrincipalName
+| extend IsNewIP = not(IPAddress in (KnownIPs))
+| where IsNewIP == true
+| project TimeGenerated, UserId, IPAddress, RequestUri, UserAgent, ResponseStatusCode
+| order by TimeGenerated desc

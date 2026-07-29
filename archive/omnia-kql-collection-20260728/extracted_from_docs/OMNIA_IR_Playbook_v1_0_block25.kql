@@ -1,0 +1,6 @@
+// ATT&CK: T1078
+SigninLogs
+| where TimeGenerated > ago(24h)
+| where RiskEventTypes has "impossibleTravel"
+| project TimeGenerated, UserPrincipalName, IPAddress, Location, RiskDetail
+| order by TimeGenerated desc

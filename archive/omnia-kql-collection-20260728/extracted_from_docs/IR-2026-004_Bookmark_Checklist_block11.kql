@@ -1,0 +1,13 @@
+let SweptServers = dynamic([
+    "hqdev03","hqdev05","hqdev07","hqrpauat01","hqrpaprod01","opbnaquickbooks",
+    "opcldsqldw01","opcldsqlmeta01","opcldsmtp01","opclddsync","opcldlogicmon",
+    "opcldprtgcore01","opcldtabclub01","opcldtabclub02","opcldtabclub03","opcldtabclub04",
+    "opcldtableaumon","opcldscheduler","hqscheduler01","hqaccess01","hqfile01",
+    "hqdhcp01","hqdhcp02","hqprint","hqprtg01"
+]);
+DeviceProcessEvents
+| where Timestamp > ago(30d)
+| where DeviceName has_any (SweptServers) or DeviceName has "hqmgmt"
+| where FileName in~ ("curl.exe","msiexec.exe","vaelix.exe","Ditto.exe","cmd.exe","powershell.exe","rclone.exe","wmic.exe")
+| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine
+| order by Timestamp asc

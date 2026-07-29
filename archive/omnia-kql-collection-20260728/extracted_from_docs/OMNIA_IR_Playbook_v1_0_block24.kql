@@ -1,0 +1,7 @@
+// ATT&CK: T1078
+SigninLogs
+| where TimeGenerated > ago(24h)
+| where RiskEventTypes has_any ("unfamiliarFeatures", "newCountry")
+| project TimeGenerated, UserPrincipalName, IPAddress, Location,
+          RiskDetail, RiskLevelDuringSignIn
+| order by TimeGenerated desc

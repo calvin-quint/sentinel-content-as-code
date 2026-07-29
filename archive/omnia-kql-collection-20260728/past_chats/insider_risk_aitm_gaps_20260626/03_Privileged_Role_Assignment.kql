@@ -1,0 +1,11 @@
+// Source: chat "KQL queries for insider risk and AITM detection" (2026-06-26)
+// Privileged role assigned outside PIM / outside business hours
+AuditLogs
+| where TimeGenerated > ago(24h)
+| where OperationName in ("Add member to role", "Add eligible member to role")
+| extend RoleName = tostring(TargetResources[0].displayName)
+| where RoleName in ("Global Administrator", "Privileged Role Administrator",
+    "Security Administrator", "Exchange Administrator", "SharePoint Administrator")
+| extend InitiatorUPN = tostring(InitiatedBy.user.userPrincipalName)
+| project TimeGenerated, OperationName, InitiatorUPN, RoleName, TargetResources
+| order by TimeGenerated desc

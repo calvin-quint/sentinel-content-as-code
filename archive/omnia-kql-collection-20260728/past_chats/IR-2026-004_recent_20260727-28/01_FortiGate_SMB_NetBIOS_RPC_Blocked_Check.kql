@@ -1,0 +1,46 @@
+// Source: chat "KQL query for blocked SMB/NetBIOS/RPC traffic" (2026-07-28/29)
+// IR-2026-004
+
+// Stage 1 - validate schema/field values first (run before trusting filtered queries below)
+CommonSecurityLog
+| where TimeGenerated > ago(7d)
+| where DeviceVendor has "Fortinet"
+| where DestinationPort in (135, 137, 138, 139, 445)
+| summarize Count = count() by DeviceAction, Activity, DestinationPort
+| order by Count desc
+
+// Stage 2 - all SMB/NetBIOS/RPC traffic seen by the firewall
+CommonSecurityLog
+| where TimeGenerated > ago(7d)
+| where DeviceVendor has "Fortinet"
+| where DestinationPort in (135, 137, 138, 139, 445)
+| project TimeGenerated, DeviceAction, Activity, SourceIP, SourcePort, DestinationIP, DestinationPort, Protocol, DeviceCustomString1, DeviceCustomString2, Message
+| order by TimeGenerated desc
+
+// Stage 3 - narrowed to blocked/denied only (adjust DeviceAction list once Stage 1 shows real values)
+CommonSecurityLog
+| where TimeGenerated > ago(7d)
+| where DeviceVendor has "Fortinet"
+| where DestinationPort in (135, 137, 138, 139, 445)
+| where DeviceAction has_any ("deny", "block", "drop", "reject", "close", "timeout", "server-rst", "client-rst")
+| project TimeGenerated, DeviceAction, SourceIP, SourcePort, DestinationIP, DestinationPort, Protocol, Message
+| order by TimeGenerated desc
+
+// Scoped to Marcie's device (omnia-1272, DHCP IP 10.16.17.155) - all SMB/RPC/NetBIOS traffic
+CommonSecurityLog
+| where DeviceVendor contains "Fortinet"
+| where TimeGenerated > ago(30d)
+| where SourceIP == "10.16.17.155" or DestinationIP == "10.16.17.155"
+| where SourcePort in (135, 137, 138, 139, 445) or DestinationPort in (135, 137, 138, 139, 445)
+| project TimeGenerated, SourceIP, SourcePort, DestinationIP, DestinationPort, DeviceAction, Protocol, Activity, SentBytes, ReceivedBytes
+| order by TimeGenerated desc
+
+// Same, narrowed to denied/blocked only
+CommonSecurityLog
+| where DeviceVendor contains "Fortinet"
+| where TimeGenerated > ago(30d)
+| where SourceIP == "10.16.17.155" or DestinationIP == "10.16.17.155"
+| where SourcePort in (135, 137, 138, 139, 445) or DestinationPort in (135, 137, 138, 139, 445)
+| where DeviceAction has_any ("deny", "drop", "reject")
+| project TimeGenerated, SourceIP, SourcePort, DestinationIP, DestinationPort, DeviceAction, Protocol, Activity, SentBytes, ReceivedBytes
+| order by TimeGenerated desc

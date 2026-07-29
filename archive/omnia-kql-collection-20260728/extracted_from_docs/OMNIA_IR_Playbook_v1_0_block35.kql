@@ -1,0 +1,7 @@
+// ATT&CK: T1204.002 — user dismissed SmartScreen warning
+DeviceEvents
+| where ActionType in ("SmartScreenAppWarning", "SmartScreenUserOverride")
+| where Timestamp > ago(24h)
+| project Timestamp, DeviceName, AccountName, ActionType,
+          FileName, FolderPath, RemoteUrl
+| order by Timestamp desc

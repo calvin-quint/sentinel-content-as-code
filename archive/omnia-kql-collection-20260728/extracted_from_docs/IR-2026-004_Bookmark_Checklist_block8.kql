@@ -1,0 +1,5 @@
+DeviceProcessEvents
+| where Timestamp > ago(30d)
+| where FileName =~ "rclone.exe" or ProcessVersionInfoOriginalFileName =~ "rclone.exe"
+| project Timestamp, DeviceName, AccountName, ProcessCommandLine
+| order by Timestamp asc

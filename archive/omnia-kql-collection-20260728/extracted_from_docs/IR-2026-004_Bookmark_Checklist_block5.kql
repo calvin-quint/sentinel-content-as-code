@@ -1,0 +1,9 @@
+// Anomalous TGS requests with RC4 encryption (classic Kerberoasting signature)
+SecurityEvent
+| where TimeGenerated > ago(30d)
+| where EventID == 4769
+| where TicketEncryptionType == "0x17"  // RC4 — legitimate services should use AES
+| where ServiceName !endswith "$"       // exclude machine account service tickets
+| summarize RequestCount = count(), Accounts = make_set(TargetUserName) by Computer, IpAddress
+| where RequestCount > 5                // tune threshold — a burst of requests is the signal
+| order by RequestCount desc

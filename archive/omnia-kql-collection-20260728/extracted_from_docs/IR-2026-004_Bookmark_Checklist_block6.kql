@@ -1,0 +1,6 @@
+DeviceProcessEvents
+| where Timestamp > ago(30d)
+| where FileName =~ "wmic.exe"
+| where ProcessCommandLine has_all ("SecurityCenter2", "AntiVirusProduct")
+| project Timestamp, DeviceName, AccountName, ProcessCommandLine
+| order by Timestamp asc

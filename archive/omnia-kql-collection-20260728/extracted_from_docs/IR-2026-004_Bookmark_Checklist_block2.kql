@@ -1,0 +1,7 @@
+Event
+| where TimeGenerated > ago(30d)
+| where Source == "Microsoft-Windows-NTLM"
+| where EventID == 8004
+| where Computer has_any ("hqdc01","hqdc02","hqdc03","opclddc01","opclddc02")
+| project TimeGenerated, Computer, EventData
+| order by TimeGenerated asc

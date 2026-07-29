@@ -1,0 +1,10 @@
+let ReplicationGUIDs = dynamic(["1131f6ad-9c07-11d1-f79f-00c04fc2dcd2","1131f6aa-9c07-11d1-f79f-00c04fc2dcd2","89e95b76-444d-4c62-991a-0facbeda640c"]);
+let KnownDCs = dynamic(["HQDC01$","HQDC02$","HQDC03$","OPCLDDC01$","OPCLDDC02$"]);
+SecurityEvent
+| where TimeGenerated > ago(30d)
+| where Computer has_any ("hqdc01","hqdc02","hqdc03","opclddc01","opclddc02")
+| where EventID == 4662
+| where Properties has_any (ReplicationGUIDs)
+| where SubjectUserName !in (KnownDCs)
+| project TimeGenerated, Computer, SubjectUserName, ObjectName, Properties
+| order by TimeGenerated asc

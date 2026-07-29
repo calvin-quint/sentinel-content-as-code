@@ -1,0 +1,27 @@
+// Source: chat "Proactive threat hunting queries and techniques" (2026-06-29)
+// ATT&CK: T1550.001 - Use Application Access Token (dormant persistence)
+// Identify apps with dangerous permissions that are no longer active
+// Cross-reference CloudAppEvents (last activity) vs. AuditLogs (consent date)
+let HighRiskPermissions = dynamic([
+    "Mail.Send", "Mail.ReadWrite", "Mail.Read",
+    "Group.ReadWrite.All", "Directory.ReadWrite.All",
+    "RoleManagement.ReadWrite.Directory", "Application.ReadWrite.All",
+    "Files.ReadWrite.All"
+]);
+let RecentAppActivity =
+    CloudAppEvents
+    | where Timestamp > ago(60d)
+    | where isnotempty(Application)
+    | summarize LastSeen = max(Timestamp) by Application;
+AuditLogs
+| where TimeGenerated > ago(180d)
+| where OperationName == "Consent to application"
+| extend AppName = tostring(TargetResources[0].displayName)
+| extend Permissions = tostring(TargetResources[0].modifiedProperties)
+| where Permissions has_any (HighRiskPermissions)
+| summarize ConsentDate = min(TimeGenerated) by AppName
+| join kind=leftouter RecentAppActivity on $left.AppName == $right.Application
+| extend DaysSinceActivity = datetime_diff('day', now(), coalesce(LastSeen, ConsentDate))
+| where DaysSinceActivity > 60
+| project AppName, ConsentDate, LastSeen, DaysSinceActivity
+| order by DaysSinceActivity desc

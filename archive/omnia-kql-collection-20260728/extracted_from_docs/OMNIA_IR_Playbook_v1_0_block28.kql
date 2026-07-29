@@ -1,0 +1,8 @@
+// DeviceNetworkEvents — browser/process download correlation
+DeviceNetworkEvents
+| where DeviceName == "<device_name>"
+| where Timestamp > ago(48h)
+| where RemoteUrl contains "<suspicious_domain_or_url>"
+| project Timestamp, DeviceName, RemoteUrl, RemoteIP, InitiatingProcessFileName,
+          InitiatingProcessAccountName, InitiatingProcessCommandLine
+| order by Timestamp desc

@@ -1,0 +1,11 @@
+DeviceProcessEvents
+| where Timestamp > ago(60d)
+| where FileName has_any ("goodsync.exe", "gsync.exe") or ProcessCommandLine has "goodsync"
+| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine
+| union (
+    DeviceFileEvents
+    | where Timestamp > ago(60d)
+    | where FileName has_any ("goodsync.exe", "gsync.exe")
+    | project Timestamp, DeviceName, FileName, FolderPath
+)
+| order by Timestamp asc

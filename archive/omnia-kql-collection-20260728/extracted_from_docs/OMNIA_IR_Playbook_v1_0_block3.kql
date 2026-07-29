@@ -1,0 +1,9 @@
+// ATT&CK: T1528
+SigninLogs
+| where AuthenticationProtocol == "deviceCode"
+| where TimeGenerated > ago(24h)
+| extend City = tostring(LocationDetails.city)
+| extend Country = tostring(LocationDetails.countryOrRegion)
+| project TimeGenerated, UserPrincipalName, IPAddress, City, Country,
+          tostring(DeviceDetail), IsInteractive, tostring(MfaDetail), UserAgent
+| order by TimeGenerated desc

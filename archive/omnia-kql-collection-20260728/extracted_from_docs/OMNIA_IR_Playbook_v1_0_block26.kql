@@ -1,0 +1,8 @@
+// ATT&CK: T1534 / BEC detection
+EmailEvents
+| where Timestamp > ago(30m)
+| where EmailDirection == "Outbound"
+| summarize RecipientCount = dcount(RecipientEmailAddress)
+            by SenderFromAddress, bin(Timestamp, 30m)
+| where RecipientCount > 50
+| order by RecipientCount desc

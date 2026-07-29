@@ -1,0 +1,30 @@
+// Source: chat "Detecting localgroup and password reset commands on Marcie's device" (2026-07-28)
+// IR-2026-004
+// Multi-interface coercion detection - catches PetitPotam, PrinterBug,
+// ShadowCoerce, DFSCoerce, WSPCoerce regardless of which tool/wrapper fired it.
+// Rationale: tool names/binaries churn constantly (PetitPotam PoC -> NetExec
+// module -> Coercer -> SharpCoercer -> OctoPwn); the abused RPC interfaces
+// don't. Detect at that layer.
+let CoercionInterfaces = dynamic([
+    "EncryptingFileSystem",  // MS-EFSR   - PetitPotam
+    "PrintSystemRemote",     // MS-RPRN   - PrinterBug/SpoolSample
+    "FileServerVssAgent",    // MS-FSRVP  - ShadowCoerce
+    "DfsNamespaceManagement",// MS-DFSNM  - DFSCoerce (already tracked separately)
+    "WindowsSearchProtocol"  // MS-WSP    - WSPCoerce (workstations only - wsearch enabled by default)
+]);
+DeviceEvents
+| where ActionType == "InboundRemoteRpcCall"
+| extend AF = parse_json(AdditionalFields)
+| extend RpcInterfaceName = tostring(AF.RpcInterfaceName),
+         RpcOperationName = tostring(AF.RpcOperationName),
+         RemoteIP = tostring(AF.RemoteIP)
+| where RpcInterfaceName in (CoercionInterfaces)
+| summarize DistinctMethodsFired = dcount(RpcOperationName),
+            MethodsSeen = make_set(RpcOperationName),
+            FirstCall = min(Timestamp), LastCall = max(Timestamp)
+    by DeviceName, RemoteIP, RpcInterfaceName, bin(Timestamp, 5m)
+| order by LastCall desc
+
+// NOTE: A follow-up variant correlating specifically to DC-targeted coercion
+// (distinguishing DC hits from workstation hits) was discussed but literal
+// text not recovered from search.

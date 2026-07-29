@@ -1,0 +1,9 @@
+// ATT&CK: T1534 - Internal Spearphishing
+// Internal sends bypass external email filtering — check explicitly
+EmailEvents
+| where SenderFromAddress =~ "<upn>"
+| where Timestamp > ago(7d)
+| where EmailDirection in ("Inbound", "IntraOrg")
+| project Timestamp, SenderFromAddress, RecipientEmailAddress, Subject,
+          DeliveryAction, EmailDirection, NetworkMessageId
+| order by Timestamp desc

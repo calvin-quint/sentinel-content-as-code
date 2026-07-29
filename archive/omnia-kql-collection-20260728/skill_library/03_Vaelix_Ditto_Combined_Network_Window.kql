@@ -1,0 +1,16 @@
+// Source: "Wacatac malware detection and remediation" session (past chat)
+// Purpose: full network activity for both malware families across the
+// entire compromise window, one combined query.
+// Result: confirmed the 147 vaelix.exe events (DC hits resolved to
+// hqdc01/02/03.op.omniapartners.com). Zero Ditto.exe rows — despite Startup
+// persistence, Ditto made no outbound network connections in this window
+// (12:54 PM Jul 20 - 3:15 PM Jul 21). Clipboard capture tools typically
+// don't need network activity to function, consistent with Ditto's role
+// as a local capture tool rather than a network-beaconing implant.
+
+DeviceNetworkEvents
+| where Timestamp between (datetime(2026-07-20T12:54:00) .. datetime(2026-07-21T15:15:00))
+| where InitiatingProcessFileName =~ "vaelix.exe"
+    or InitiatingProcessFileName =~ "Ditto.exe"
+| project Timestamp, DeviceName, RemoteIP, RemotePort, RemoteUrl, InitiatingProcessFileName
+| order by Timestamp asc

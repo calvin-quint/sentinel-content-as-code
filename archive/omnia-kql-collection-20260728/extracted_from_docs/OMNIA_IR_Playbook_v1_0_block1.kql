@@ -1,0 +1,7 @@
+// ATT&CK: T1528 - Steal Application Access Token
+EmailEvents
+| where SenderFromAddress contains "<upn>"
+| where Timestamp > ago(72h)
+| project Timestamp, SenderFromAddress, RecipientEmailAddress,
+          Subject, DeliveryAction, EmailDirection, SenderIPv4
+| order by Timestamp desc

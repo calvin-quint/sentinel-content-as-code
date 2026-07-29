@@ -1,0 +1,25 @@
+// Source: chat "Proactive threat hunting queries and techniques" (2026-06-29) - OMNIA-specific
+// ATT&CK: T1078.003 - Valid Accounts: Local Accounts (elevated via ABR)
+// Hypothesis: ABR approvals are being rubber-stamped; look for sensitive process
+// activity immediately following an ABR elevation grant
+let ABRApprovals =
+    AdminByRequestLogs_CL
+    | where TimeGenerated > ago(30d)
+    | where RequestStatus_s == "Approved"
+    | project ApprovalTime = TimeGenerated,
+              ApprovedUser = RequestedBy_s,
+              DeviceName = ComputerName_s,
+              Justification = Justification_s;
+DeviceProcessEvents
+| where Timestamp > ago(30d)
+| where InitiatingProcessAccountName !in ("SYSTEM", "NT AUTHORITY\\SYSTEM")
+| where FileName in~ (
+    "powershell.exe", "cmd.exe", "wscript.exe", "cscript.exe",
+    "mshta.exe", "regsvr32.exe", "certutil.exe", "wmic.exe",
+    "net.exe", "whoami.exe", "nltest.exe"
+)
+| join kind=inner ABRApprovals on $left.DeviceName == $right.DeviceName
+| where Timestamp between (ApprovalTime .. (ApprovalTime + 30m))
+| project ApprovalTime, Timestamp, ApprovedUser, DeviceName,
+          FileName, ProcessCommandLine, Justification
+| order by ApprovalTime desc

@@ -1,0 +1,109 @@
+// Source: "Teams cross-tenant attack detection query" session (past chat)
+// This session built OMNIA_TeamsHelpdeskImpersonation_Hunt_FINAL.kql —
+// the query that CAUGHT IR-2026-004 during validation. Full multi-stage
+// architecture: Stage -1 (LOLRMM feed), Stage 0 (SD/Infra roster),
+// Stage 1 (Teams impersonation classifier), Stage 1b (spoofed SD/Infra
+// identity — the stage that actually caught this campaign), Stage 1.5
+// (impersonation->RMM chain), Stage 2 (RMM launch), Stage 3 (recon burst),
+// Stage 3.5 (curl), Stage 4 (WinRM lateral), Stage 5 (rclone exfil).
+// Per Calvin's explicit architecture decision, kept as SEVERAL SMALLER
+// QUERIES rather than one monolithic query — different stages need
+// different alerting cadence (Stage 1/1b = real-time high-confidence;
+// Stage 2/-1 = periodic human-judgment hygiene review).
+//
+// NOTE: this recovery has the stages below verified from search snippets.
+// The complete final assembled file (all 10 stages + final union with
+// IsSDInfraUser flag) was written to /home/claude/ in that session but its
+// full body beyond these stages could not be recovered from search alone —
+// re-running that session's chat history directly would be needed for a
+// byte-perfect copy of the full assembly.
+
+// =============================================================
+// STAGE 0 - Current Service Desk + Infra roster (live pull)
+// =============================================================
+let _SDInfraGroupNames = dynamic(["AAD - IT User - Infrastructure", "AAD - IT User - Support Desk Technician"]);
+let SDInfraUsers =
+    IdentityInfo
+    | summarize arg_max(TimeGenerated, *) by AccountUpn
+    | where GroupMembership has_any (_SDInfraGroupNames)
+    | extend NormalizedDisplayName = replace_string(AccountName, ".", " ")
+    | project AccountUpn, NormalizedDisplayName;
+
+// =============================================================
+// STAGE 1 - Teams native impersonation classifier
+// ATT&CK: T1566.002
+// =============================================================
+let T_TeamsImpersonation =
+    CloudAppEvents
+    | where Timestamp > ago(14d)                // hardcoded - match _Lookback
+    | where ActionType == "TeamsImpersonationDetected"
+    | extend
+        ImpersonationDisplayName = tostring(RawEventData.Sender.DisplayName),
+        ImpersonationUPN         = tostring(RawEventData.Sender.UPN),
+        ImpersonationType        = tostring(RawEventData.ImpersonationType),
+        ImpactedUserUPN          = tostring(RawEventData.UserId)
+    | extend
+        EventTime      = Timestamp,
+        EventType      = strcat("[TEAMS_IMPERSONATION:", ImpersonationType, "] Cross-tenant lure"),
+        Actor          = ImpactedUserUPN,
+        SourceIP       = "N/A",
+        IsFranklin     = "N/A",
+        Detail         = strcat(
+                           "ImpersonatorName=", ImpersonationDisplayName,
+                           " | ImpersonatorUPN=", ImpersonationUPN,
+                           " | Type=", ImpersonationType
+                         ),
+        KillChainPhase = "Delivery - Teams Social Engineering",
+        UniqueToken    = "",
+        CorrId         = ImpactedUserUPN,
+        UA             = ""
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// STAGE 1b - Spoofed SD/Infra identity via Teams chat or call
+// (external tenant display name matches a real current IT staff
+// member's name). THIS IS THE STAGE THAT CAUGHT THE REAL JULY
+// 2026 CAMPAIGN AGAINST CALVIN - the native classifier (Stage 1)
+// did NOT catch it; this direct roster-match approach did.
+// Validated against real tenant data: 7 rows returned, complete
+// timeline of the actual attack — chat created Jul 16 4:05 PM via
+// the deepaks@scapini.com.br persona, a call/meeting later that day
+// at 8:39 PM, then the direct approach Jul 20 (two ChatCreated events
+// at 12:40/12:41 PM, a missed call at 4:54 PM, a connected call at
+// 4:56 PM, another at 5:11 PM) — all attributing cleanly to
+// Calvin.Quint@omniapartners.com.
+// Sources confirmed working: both "ChatCreated" and "CallOrMeeting"
+// CloudAppEvents ActionTypes.
+// =============================================================
+// (Full T_SpoofedSDInfraIdentity query body — join against SDInfraUsers
+// on NormalizedDisplayName vs. external-tenant sender display name —
+// referenced but exact final field mapping not captured in this recovery
+// pass; re-pull from chat ec46b851 directly for the literal query text.)
+
+// =============================================================
+// STAGE 5 - Rclone / exfil tooling (validated clean — no results)
+// =============================================================
+DeviceProcessEvents
+| where Timestamp > ago(14d)
+| where FileName =~ "rclone.exe" or ProcessVersionInfoOriginalFileName =~ "rclone.exe"
+| project Timestamp, DeviceName, InitiatingProcessAccountUpn, ProcessCommandLine
+| order by Timestamp desc
+
+// VALIDATION RESULT SUMMARY (all stages tested against live tenant data):
+// - Stage 0: confirmed against real AAD group membership
+// - Stage -1 (LOLRMM feed): confirmed resolves correctly; Splashtop, Atera,
+//   mstsc.exe, CentraStage (Now Datto) all confirmed real noise, excluded
+// - Stage 1: validated against one real TeamsImpersonationDetected event
+//   (Elizabeth Taylor / "Tom McDonald" brand impersonation, May 2026)
+// - Stage 1b: validated against the real IR-2026-004 campaign — 7/7 rows
+// - Stage 2 (RMM launch): after exclusions, surfaced Arnold Fuller/
+//   TeamViewer (authorized, EA) and the two curl-based payload-staging
+//   incidents (Gabriella/Marcie — already remediated at time of writing)
+// - Stage 3 (recon burst): tested against Gabriella/Marcie devices,
+//   confirmed clean — no whoami/nltest/etc. in the relevant windows
+// - Stage 4 (WinRM lateral, ports 5985/5986 within 30 min of RMM launch):
+//   no results — confirmed neither remediated incident progressed to
+//   WinRM lateral movement
+// - Stage 5 (rclone): no results — confirmed clean

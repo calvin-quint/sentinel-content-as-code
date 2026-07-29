@@ -1,0 +1,8 @@
+// CloudAppEvents — covers recent window
+CloudAppEvents
+| where AccountUpn == "<upn>"
+| where ActionType in ("New-InboxRule", "Set-InboxRule")
+| extend RuleName = tostring(RawEventData.Parameters[0].Value)
+| extend RuleAction = tostring(RawEventData.Parameters)
+| project Timestamp, AccountUpn, ActionType, RuleName, RuleAction, RawEventData
+| order by Timestamp desc

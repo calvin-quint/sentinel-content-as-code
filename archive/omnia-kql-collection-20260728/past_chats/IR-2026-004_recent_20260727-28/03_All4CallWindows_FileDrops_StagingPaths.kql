@@ -1,0 +1,24 @@
+// Source: chat "KQL query for file execution paths" (2026-07-28/29)
+// IR-2026-004 - file drops (curl-delivered or otherwise) in staging paths, all 4 call windows
+let CallWindows = datatable(Session:string, DeviceKey:string, StartTime:datetime, EndTime:datetime)
+[
+    "Gabriella - Call 1",  "1294", datetime(2026-07-16 16:05:48), datetime(2026-07-16 16:26:14),
+    "Marcie - Call 1",     "1272", datetime(2026-07-20 12:41:32), datetime(2026-07-20 12:43:27),
+    "Marcie - Call 2",     "1272", datetime(2026-07-20 12:43:53), datetime(2026-07-20 12:58:06),
+    "Marcie - Call 3",     "1272", datetime(2026-07-21 15:07:22), datetime(2026-07-21 15:16:42)
+];
+CallWindows
+| join kind=inner (
+    DeviceFileEvents
+    | where Timestamp > ago(14d)
+    | where DeviceName has_any ("1272", "1294")
+    | where ActionType in ("FileCreated", "FileModified", "FileRenamed")
+    | where FolderPath has_any ("Downloads", "Temp", "AppData", "Desktop", "ProgramData")
+    | extend DeviceKey = iff(DeviceName contains "1272", "1272", "1294")
+    | project Timestamp, DeviceKey, DeviceName, ActionType, FileName, FolderPath, SHA256,
+              InitiatingProcessAccountName, InitiatingProcessFileName, InitiatingProcessCommandLine
+) on DeviceKey
+| where Timestamp between (StartTime .. EndTime)
+| project Session, Timestamp, DeviceName, ActionType, FileName, FolderPath, SHA256,
+          InitiatingProcessAccountName, InitiatingProcessFileName, InitiatingProcessCommandLine
+| order by Session asc, Timestamp asc

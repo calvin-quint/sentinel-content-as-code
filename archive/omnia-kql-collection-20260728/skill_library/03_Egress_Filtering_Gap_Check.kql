@@ -1,0 +1,19 @@
+// Source: "Chaos ransomware group attribution" session (past chat)
+// CRITICAL FINDING: confirmed all five DCs made outbound SMB/RPC/RDP
+// connection attempts DIRECTLY to an external internet IP (216.155.157.161),
+// with TCP handshakes completing before a firewall elsewhere tore the
+// sessions down. This confirms ZERO egress/outbound filtering between the
+// DCs and the open internet on these ports — distinct from, and arguably
+// worse than, "the host firewall was disabled." A DC should never reach a
+// public IP on these ports under any circumstance. The session teardown
+// observed elsewhere in the stack was a lucky, incidental catch — not a
+// designed control. This belongs in the Security Review as its own gap,
+// distinct from the firewall-disabled finding, elevated to CRITICAL.
+
+DeviceNetworkEvents
+| where Timestamp > ago(90d)
+| where DeviceName has_any ("hqdc01","hqdc02","hqdc03","opclddc01","opclddc02")
+| where RemotePort in (445, 135, 3389, 5985, 5986)
+| where not(ipv4_is_private(RemoteIP))
+| project Timestamp, DeviceName, RemoteIP, RemotePort, InitiatingProcessFileName
+| order by Timestamp asc

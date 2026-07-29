@@ -1,0 +1,6 @@
+// CloudAppEvents — forwarding via inbox rule
+CloudAppEvents
+| where ActionType in ("New-InboxRule", "Set-InboxRule")
+| where RawEventData has_any ("ForwardTo", "RedirectTo", "ForwardAsAttachmentTo")
+| project Timestamp, AccountUpn = tostring(RawEventData.UserId), RawEventData
+| order by Timestamp desc

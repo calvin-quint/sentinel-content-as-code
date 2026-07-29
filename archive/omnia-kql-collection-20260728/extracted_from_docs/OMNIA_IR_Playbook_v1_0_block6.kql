@@ -1,0 +1,26 @@
+// ATT&CK: T1539
+// NewIPs = IPs not seen from this user in prior 14 days — strongest signal
+let ipBaseline =
+    SigninLogs
+    | where TimeGenerated between (ago(14d) .. ago(1d))
+    | where ResultType == 0
+    | summarize KnownIPs = make_set(IPAddress) by UserPrincipalName;
+SigninLogs
+| where TimeGenerated > ago(1d)
+| where isnotempty(UniqueTokenIdentifier)
+| where ResultType == 0
+| where not(NetworkLocationDetails has "namedLocation")
+| summarize
+    TokenIPs       = make_set(IPAddress),
+    TokenCountries = make_set(tostring(LocationDetails.countryOrRegion)),
+    TokenApps      = make_set(AppDisplayName),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UniqueTokenIdentifier, UserPrincipalName
+| where array_length(TokenIPs) > 1
+| join kind=leftouter ipBaseline on UserPrincipalName
+| extend NewIPs = set_difference(TokenIPs, KnownIPs)
+| where array_length(NewIPs) > 0
+| project LastSeen, FirstSeen, UserPrincipalName, UniqueTokenIdentifier,
+          TokenIPs, NewIPs, TokenCountries, TokenApps
+| order by LastSeen desc

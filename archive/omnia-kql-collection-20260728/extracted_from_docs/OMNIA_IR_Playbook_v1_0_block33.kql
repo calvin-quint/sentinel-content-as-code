@@ -1,0 +1,16 @@
+// Combined — devices with file AND executed it
+let FilesFound =
+    DeviceFileEvents
+    | where SHA256 == "<sha256_hash>"
+    | where Timestamp > ago(7d)
+    | project DeviceName, FileName, FolderPath, DownloadTime = Timestamp;
+let Executions =
+    DeviceProcessEvents
+    | where SHA256 == "<sha256_hash>"
+    | where Timestamp > ago(7d)
+    | project DeviceName, AccountName, ProcessCommandLine, ExecutionTime = Timestamp;
+FilesFound
+| join kind=leftouter Executions on DeviceName
+| project DeviceName, FileName, FolderPath, DownloadTime,
+          AccountName, ProcessCommandLine, ExecutionTime
+| order by DownloadTime asc

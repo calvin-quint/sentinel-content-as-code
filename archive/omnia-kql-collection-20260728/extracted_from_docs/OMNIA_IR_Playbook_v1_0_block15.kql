@@ -1,0 +1,6 @@
+// Org-wide URL clicks — same malicious URL or domain
+UrlClickEvents
+| where Timestamp > ago(7d)
+| where Url contains "<malicious_url_or_domain>"
+| project Timestamp, AccountUpn, Url, ActionType, IsClickedThrough, NetworkMessageId
+| order by Timestamp desc

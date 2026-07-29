@@ -1,0 +1,7 @@
+DeviceNetworkEvents
+| where Timestamp > ago(30d)
+| where DeviceName has_any ("omnia-1272", "omnia-1294", "omnia-1337")
+| where RemotePort in (5985, 5986)
+| where InitiatingProcessFileName !in~ ("chrome.exe","msedge.exe","svchost.exe")
+| project Timestamp, DeviceName, RemoteIP, RemotePort, InitiatingProcessFileName, InitiatingProcessAccountName
+| order by Timestamp asc

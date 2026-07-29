@@ -1,0 +1,19 @@
+// ATT&CK: T1566.002 + T1528 — click-to-compromise chain
+let ClickEvents =
+    UrlClickEvents
+    | where AccountUpn == "<upn>"
+    | where Timestamp > ago(72h)
+    | extend UrlDomain = tostring(parse_url(Url).Host)
+    | project ClickTime = Timestamp, AccountUpn, Url, UrlDomain, IsClickedThrough;
+let PostClickSignins =
+    SigninLogs
+    | where UserPrincipalName == "<upn>"
+    | where TimeGenerated > ago(72h)
+    | project SigninTime = TimeGenerated, UserPrincipalName, IPAddress, IsInteractive,
+              AuthenticationProtocol, RiskDetail, tostring(DeviceDetail), UserAgent;
+ClickEvents
+| join kind=inner PostClickSignins on $left.AccountUpn == $right.UserPrincipalName
+| where SigninTime between (ClickTime .. (ClickTime + 48h))
+| project ClickTime, SigninTime, Url, UrlDomain, IPAddress, IsInteractive,
+          AuthenticationProtocol, RiskDetail, UserAgent
+| order by ClickTime desc

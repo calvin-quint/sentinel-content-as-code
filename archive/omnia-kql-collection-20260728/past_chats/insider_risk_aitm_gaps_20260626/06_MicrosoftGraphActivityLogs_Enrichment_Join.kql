@@ -1,0 +1,51 @@
+// Source: chat "KQL queries for insider risk and AITM detection" (2026-06-26)
+// Enriches sparse MicrosoftGraphActivityLogs with app/user identity via token-id joins
+MicrosoftGraphActivityLogs
+| where TimeGenerated > ago(24h)
+| where RequestMethod == "POST"
+| where RequestUri has_any ("/sendMail", "/messages", "/members", "/assignLicense")
+| where UserAgent !has "Microsoft"
+// Join to AADServicePrincipalSignInLogs to get app identity (app-only flow)
+| join kind=leftouter (
+    AADServicePrincipalSignInLogs
+    | where TimeGenerated > ago(24h)
+    | project
+        UniqueTokenId,
+        AppId,
+        ServicePrincipalName,
+        ServicePrincipalId,
+        ResourceDisplayName,
+        IPAddress_SP = IPAddress,
+        ConditionalAccessStatus
+) on $left.SignInActivityId == $right.UniqueTokenId
+// Also join to SigninLogs for delegated (user-initiated) flows
+| join kind=leftouter (
+    SigninLogs
+    | where TimeGenerated > ago(24h)
+    | project
+        UniqueTokenIdentifier,
+        UserPrincipalName,
+        AppDisplayName,
+        AppId_User = AppId,
+        IPAddress_User = IPAddress,
+        AuthenticationProtocol,
+        DeviceDetail,
+        MfaDetail
+) on $left.SignInActivityId == $right.UniqueTokenIdentifier
+| project
+    TimeGenerated,
+    IPAddress,
+    RequestUri,
+    ResponseStatusCode,
+    UserAgent,
+    ServicePrincipalName,
+    AppId,
+    ResourceDisplayName,
+    UserPrincipalName,
+    AppDisplayName,
+    AuthenticationProtocol,
+    DeviceDetail,
+    MfaDetail
+| order by TimeGenerated desc
+// Join field: SignInActivityId (Graph logs) == UniqueTokenId (service principal, app-only)
+//          or UniqueTokenIdentifier (SigninLogs, delegated flow)

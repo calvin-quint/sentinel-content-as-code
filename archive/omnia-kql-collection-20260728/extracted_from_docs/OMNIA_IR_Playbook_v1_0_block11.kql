@@ -1,0 +1,6 @@
+// OfficeActivity — mailbox-level forwarding (persists outside inbox rules)
+OfficeActivity
+| where Operation == "Set-Mailbox"
+| where Parameters has "ForwardingSmtpAddress" or Parameters has "ForwardingAddress"
+| project TimeGenerated, UserId, Operation, Parameters, ClientIP
+| order by TimeGenerated desc

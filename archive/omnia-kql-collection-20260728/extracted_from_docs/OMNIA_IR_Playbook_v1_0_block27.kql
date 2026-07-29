@@ -1,0 +1,10 @@
+// ATT&CK: T1204.002 - User Execution: Malicious File
+DeviceFileEvents
+| where DeviceName == "<device_name>"
+| where Timestamp > ago(48h)
+| where ActionType in ("FileCreated", "FileModified")
+| where FolderPath has_any ("Downloads", "Temp", "AppData", "Desktop")
+| project Timestamp, DeviceName, FileName, FolderPath, SHA256,
+          InitiatingProcessAccountName, InitiatingProcessFileName,
+          InitiatingProcessCommandLine
+| order by Timestamp desc

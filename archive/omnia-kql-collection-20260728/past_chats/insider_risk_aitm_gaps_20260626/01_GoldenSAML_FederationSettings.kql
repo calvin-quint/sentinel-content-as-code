@@ -1,0 +1,8 @@
+// Source: chat "KQL queries for insider risk and AITM detection" (2026-06-26)
+// Federation settings modified (Golden SAML setup)
+AuditLogs
+| where TimeGenerated > ago(24h)
+| where OperationName in ("Set federation settings on domain", "Set domain authentication",
+    "Add unverified domain to company", "Add verified domain to company")
+| project TimeGenerated, OperationName, InitiatedBy, TargetResources, Result
+| order by TimeGenerated desc

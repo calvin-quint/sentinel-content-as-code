@@ -1,0 +1,16 @@
+// Combined — who received AND clicked (join on NetworkMessageId)
+let Senders =
+    EmailEvents
+    | where Timestamp > ago(7d)
+    | where SenderFromAddress contains "<sender_domain_or_address>"
+    | project NetworkMessageId, RecipientEmailAddress, Subject, DeliveryAction;
+let Clickers =
+    UrlClickEvents
+    | where Timestamp > ago(7d)
+    | where Url contains "<malicious_url_or_domain>"
+    | project AccountUpn, ClickTime = Timestamp, Url, IsClickedThrough, NetworkMessageId;
+Senders
+| join kind=inner Clickers on NetworkMessageId
+| project RecipientEmailAddress, AccountUpn, Subject, ClickTime,
+          Url, IsClickedThrough, DeliveryAction
+| order by ClickTime desc

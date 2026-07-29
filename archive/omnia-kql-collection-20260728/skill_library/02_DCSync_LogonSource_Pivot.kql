@@ -1,0 +1,12 @@
+// Source: "Chaos ransomware group attribution" session (past chat)
+// Purpose: a bare Event 4662 (DCSync suspected) doesn't tell you where the
+// request came from. Pivot to Event 4624 on the same DC using LogonId to
+// pull the actual source IP for any hits from the DCSync detection query.
+
+let SuspectLogonIds = dynamic([]);  // paste LogonId values from the DCSync detection query results
+SecurityEvent
+| where TimeGenerated > ago(30d)
+| where EventID == 4624
+| where LogonId in (SuspectLogonIds)
+| project TimeGenerated, Computer, Account, IpAddress, LogonType, AuthenticationPackageName, LogonId
+| order by TimeGenerated asc

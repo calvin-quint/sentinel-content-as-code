@@ -1,0 +1,12 @@
+// Source: chat "KQL query for User.Invite.All permissions" (2026-07-16)
+// Identify applications granted the User.Invite.All permission
+AuditLogs
+| where TimeGenerated > ago(90d)
+| where OperationName in ("Add app role assignment to service principal", "Add delegated permission grant")
+| where TargetResources has "User.Invite.All"
+| extend Actor = tostring(InitiatedBy.user.userPrincipalName)
+| extend AppName = tostring(TargetResources[0].displayName)
+| extend AppId = tostring(TargetResources[0].id)
+| extend ModifiedProps = tostring(TargetResources[0].modifiedProperties)
+| project TimeGenerated, OperationName, Actor, AppName, AppId, ModifiedProps, Result
+| order by TimeGenerated desc

@@ -1,0 +1,13 @@
+// Source: chat "Security investigation checklist" (2026-07-24)
+// IR-2026-004 - file drops on the two victim devices during the 4 call windows (padded +/-5 min)
+DeviceFileEvents
+| where DeviceName contains "1272" or DeviceName contains "1294"
+| where ActionType in ("FileCreated", "FileModified")
+| where (DeviceName contains "1294" and Timestamp between (datetime(2026-07-16T21:00:48) .. datetime(2026-07-16T21:31:14)))
+    or (DeviceName contains "1272" and (
+        Timestamp between (datetime(2026-07-20T17:38:53) .. datetime(2026-07-20T18:03:06))
+        or Timestamp between (datetime(2026-07-21T19:02:22) .. datetime(2026-07-21T19:21:42))
+    ))
+| project Timestamp, DeviceName, FileName, FolderPath, SHA256,
+          InitiatingProcessAccountName, InitiatingProcessFileName, InitiatingProcessCommandLine
+| order by Timestamp asc

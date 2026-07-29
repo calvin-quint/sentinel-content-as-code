@@ -1,0 +1,8 @@
+// Non-interactive only (token replay signs)
+SigninLogs
+| where TimeGenerated > ago(7d)
+| where IPAddress == "<attacker_ip>"
+| where IsInteractive == false
+| project TimeGenerated, UserPrincipalName, IPAddress,
+          AuthenticationProtocol, tostring(MfaDetail), UserAgent, RiskDetail
+| order by TimeGenerated desc

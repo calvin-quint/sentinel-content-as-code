@@ -1,0 +1,8 @@
+// All sign-ins from attacker IP
+SigninLogs
+| where TimeGenerated > ago(7d)
+| where IPAddress == "<attacker_ip>"
+| project TimeGenerated, UserPrincipalName, IPAddress, IsInteractive,
+          AuthenticationProtocol, tostring(MfaDetail), UserAgent,
+          RiskDetail, tostring(DeviceDetail)
+| order by TimeGenerated desc

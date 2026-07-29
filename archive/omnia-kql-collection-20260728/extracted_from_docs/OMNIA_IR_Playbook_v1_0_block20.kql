@@ -1,0 +1,10 @@
+// Summary — affected account count and sign-in volume
+SigninLogs
+| where TimeGenerated > ago(7d)
+| where IPAddress == "<attacker_ip>"
+| summarize FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated),
+            SigninCount = count(),
+            InteractiveCount = countif(IsInteractive == true),
+            NonInteractiveCount = countif(IsInteractive == false)
+            by UserPrincipalName, IPAddress
+| order by SigninCount desc

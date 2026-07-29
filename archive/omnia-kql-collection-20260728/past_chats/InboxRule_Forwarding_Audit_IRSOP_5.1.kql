@@ -1,0 +1,33 @@
+// Source: chat "Centralized IR reference documentation" - IR SOP Section 5.1 (2026-06-24)
+// Audit and enumerate all inbox rules for the affected user
+
+// All inbox rules for the affected user - look for archive/delete/forward actions and blank conditions
+CloudAppEvents
+| where AccountUpn == "<upn>"
+| where ActionType in ("New-InboxRule", "Set-InboxRule")
+| extend RuleName = tostring(RawEventData.Parameters[0].Value)
+| extend RuleAction = tostring(RawEventData.Parameters)
+| project Timestamp, AccountUpn, ActionType, RuleName, RuleAction, RawEventData
+| order by Timestamp desc
+
+// Blanket check - all active inbox rules regardless of when created (catches pre-lookback rules)
+OfficeActivity
+| where UserId == "<upn>"
+| where Operation in ("New-InboxRule", "Set-InboxRule", "UpdateInboxRules")
+| project TimeGenerated, UserId, Operation, Parameters, ClientIP
+| order by TimeGenerated desc
+
+// Forwarding configured via inbox rule
+CloudAppEvents
+| where ActionType in ("New-InboxRule", "Set-InboxRule")
+| where RawEventData has_any ("ForwardTo", "RedirectTo", "ForwardAsAttachmentTo")
+| project Timestamp, AccountUpn = tostring(RawEventData.UserId),
+          RawEventData
+| order by Timestamp desc
+
+// Mailbox-level forwarding (Set-Mailbox ForwardingSmtpAddress) - persists outside inbox rules
+OfficeActivity
+| where Operation == "Set-Mailbox"
+| where Parameters has "ForwardingSmtpAddress" or Parameters has "ForwardingAddress"
+| project TimeGenerated, UserId, Operation, Parameters, ClientIP
+| order by TimeGenerated desc

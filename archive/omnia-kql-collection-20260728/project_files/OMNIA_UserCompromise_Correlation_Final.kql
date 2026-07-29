@@ -1,0 +1,458 @@
+// =============================================================
+// OMNIA Partners — User Compromise Correlation Query
+// Environment: Sentinel Log Analytics
+// Version: 2.0 | July 2026
+// Author: Calvin Quint
+//
+// PARAMETERS — update _UPN and _Franklin before running
+// _Lookback resolves in native Sentinel tables only
+// For Defender-origin tables (EmailEvents, UrlClickEvents,
+// CloudAppEvents) the ago() value is hardcoded — update the
+// three hardcoded ago(30d) values to match _Lookback manually
+//
+// Known Outlook desktop AppIds (whitelisted in Stage 8):
+//   5d661950-3475-41cd-a2c3-d671a3162bc1 = Outlook desktop
+//   27922004-5251-4030-b22d-91ecd9a37ea4 = Outlook Mobile
+// =============================================================
+
+let _UPN      = "tessa.kemp@omniapartners.com";
+let _Lookback = 30d;
+let _Franklin = "12.55.65.6";
+
+// PRE-COMPUTE: NetworkMessageIds with a matching URL click
+// Inbound emails only appear in timeline if user clicked a link
+let ClickedMessageIds =
+    UrlClickEvents
+    | where Timestamp > ago(30d)                // hardcoded - match _Lookback
+    | where AccountUpn =~ _UPN
+    | where isnotempty(NetworkMessageId)
+    | distinct NetworkMessageId;
+
+// =============================================================
+// STAGE 1 - SigninLogs (anomalous only)
+// Signal filter: drops routine successful interactive Franklin
+// sign-ins. Keeps: deviceCode, non-interactive, risky, failed,
+// non-Franklin IPs, suspicious UAs, PrevSat MFA
+// ATT&CK: T1528, T1550.001, T1078
+// =============================================================
+let T_Signins =
+    SigninLogs
+    | where TimeGenerated > ago(_Lookback)
+    | where UserPrincipalName =~ _UPN
+    | extend
+        Flag_DeviceCode  = iff(AuthenticationProtocol == "deviceCode",        "[DEVICE_CODE] ",     ""),
+        Flag_NonInteract = iff(IsInteractive == false,                         "[NON_INTERACTIVE] ", "[INTERACTIVE] "),
+        Flag_PrevSat     = iff(tostring(MfaDetail) has "Previously Satisfied", "[PREV_SAT_MFA] ",   ""),
+        Flag_Electron    = iff(UserAgent has_any ("portal-browser","Electron"), "[ELECTRON_UA] ",    ""),
+        Flag_Risky       = iff(RiskLevelDuringSignIn in ("high","medium"),      "[RISKY] ",          ""),
+        IsFranklinIP     = iff(IPAddress == _Franklin, "Yes", "No")
+    | where AuthenticationProtocol == "deviceCode"
+        or IsInteractive == false
+        or tostring(MfaDetail) has "Previously Satisfied"
+        or UserAgent has_any ("portal-browser","Electron")
+        or RiskLevelDuringSignIn in ("high","medium")
+        or ResultType != 0
+        or IPAddress != _Franklin
+    | extend
+        EventTime      = TimeGenerated,
+        EventType      = strcat(Flag_DeviceCode, Flag_NonInteract, Flag_PrevSat, Flag_Electron, Flag_Risky, "Sign-in"),
+        Actor          = UserPrincipalName,
+        SourceIP       = IPAddress,
+        IsFranklin     = IsFranklinIP,
+        Detail         = strcat(
+                           "App=",        AppDisplayName,
+                           " | Auth=",    AuthenticationProtocol,
+                           " | Result=",  tostring(ResultType),
+                           " | Risk=",    RiskDetail,
+                           " | Country=", tostring(LocationDetails.countryOrRegion),
+                           " | Device=",  tostring(DeviceDetail.displayName),
+                           " | CA=",      ConditionalAccessStatus
+                         ),
+        KillChainPhase = iff(IsInteractive == false, "C2 - Token Replay", "Exploitation"),
+        UniqueToken    = UniqueTokenIdentifier,
+        CorrId         = CorrelationId,
+        UA             = UserAgent
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// STAGE 2 - EmailEvents (signal only)
+// Signal filter: threat-flagged, outbound/intraorg sends,
+// inbound only if NetworkMessageId has a matching URL click
+// ATT&CK: T1566.002, T1534
+// =============================================================
+let T_Email =
+    EmailEvents
+    | where Timestamp > ago(30d)                // hardcoded - match _Lookback
+    | where SenderFromAddress =~ _UPN
+        or RecipientEmailAddress =~ _UPN
+    | extend
+        Flag_Phish    = iff(ThreatTypes has "Phish",                                        "[PHISH] ",         ""),
+        Flag_Malware  = iff(ThreatTypes has "Malware",                                      "[MALWARE] ",       ""),
+        Flag_IntraOrg = iff(EmailDirection == "IntraOrg" and SenderFromAddress =~ _UPN,     "[INTRAORG_SEND] ", ""),
+        Flag_Outbound = iff(EmailDirection == "Outbound" and SenderFromAddress =~ _UPN,     "[OUTBOUND_SEND] ", ""),
+        Flag_Inbound  = iff(EmailDirection == "Inbound"  and RecipientEmailAddress =~ _UPN, "[INBOUND] ",       "")
+    | where ThreatTypes has_any ("Phish","Malware")
+        or (EmailDirection in ("Outbound","IntraOrg") and SenderFromAddress =~ _UPN)
+        or (EmailDirection == "Inbound" and NetworkMessageId in (ClickedMessageIds))
+    | extend
+        EventTime      = Timestamp,
+        EventType      = strcat(Flag_Phish, Flag_Malware, Flag_IntraOrg, Flag_Outbound, Flag_Inbound, "Email"),
+        Actor          = SenderFromAddress,
+        SourceIP       = SenderIPv4,
+        IsFranklin     = "N/A",
+        Detail         = strcat(
+                           "To=",        RecipientEmailAddress,
+                           " | Subj=",   Subject,
+                           " | Dir=",    EmailDirection,
+                           " | Act=",    DeliveryAction,
+                           " | Threat=", ThreatTypes
+                         ),
+        KillChainPhase = case(
+                           EmailDirection == "Outbound" and SenderFromAddress =~ _UPN, "Actions on Objectives",
+                           EmailDirection == "IntraOrg" and SenderFromAddress =~ _UPN, "Actions on Objectives",
+                           "Delivery"
+                         ),
+        UniqueToken    = "",
+        CorrId         = NetworkMessageId,
+        UA             = ""
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// STAGE 3 - UrlClickEvents (all kept - already low volume)
+// CorrId = NetworkMessageId links click back to delivery email
+// ATT&CK: T1566.002
+// =============================================================
+let T_Clicks =
+    UrlClickEvents
+    | where Timestamp > ago(30d)                // hardcoded - match _Lookback
+    | where AccountUpn =~ _UPN
+    | extend
+        Flag_Clicked = iff(IsClickedThrough == true,     "[CLICKED_THROUGH] ", "[BLOCKED] "),
+        Flag_Allowed = iff(ActionType == "ClickAllowed",  "[ALLOWED] ",         ""),
+        Flag_Blocked = iff(ActionType == "ClickBlocked",  "[BLOCK_ENFORCED] ",  "")
+    | extend
+        EventTime      = Timestamp,
+        EventType      = strcat(Flag_Clicked, Flag_Allowed, Flag_Blocked, "URL Click"),
+        Actor          = AccountUpn,
+        SourceIP       = IPAddress,
+        IsFranklin     = iff(IPAddress == _Franklin, "Yes", "No"),
+        Detail         = strcat(
+                           "URL=",    Url,
+                           " | Dom=", tostring(parse_url(Url).Host),
+                           " | Act=", ActionType
+                         ),
+        KillChainPhase = "Exploitation",
+        UniqueToken    = "",
+        CorrId         = NetworkMessageId,
+        UA             = ""
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// STAGE 4 - CloudAppEvents inbox rules (all kept - low volume)
+// Flags: blank condition (no filters = ATO persistence),
+// forwarding to external, delete/move rules
+// ATT&CK: T1137
+// =============================================================
+let T_InboxRules =
+    CloudAppEvents
+    | where Timestamp > ago(30d)                // hardcoded - match _Lookback
+    | where ActionType in ("New-InboxRule", "Set-InboxRule")
+    | extend RawUPN = tostring(RawEventData.UserId)
+    | where RawUPN =~ _UPN
+    | extend
+        RuleParams = tostring(RawEventData.Parameters),
+        Flag_Blank = iff(
+                       tostring(RawEventData.Parameters) !contains "SubjectContains"
+                       and tostring(RawEventData.Parameters) !contains "From"
+                       and tostring(RawEventData.Parameters) !contains "BodyContains",
+                       "[BLANK_CONDITION] ", ""),
+        Flag_Fwd   = iff(tostring(RawEventData.Parameters) has_any (
+                       "ForwardTo", "RedirectTo", "ForwardAsAttachmentTo"),
+                       "[FORWARDING] ", ""),
+        Flag_Delete = iff(tostring(RawEventData.Parameters) has_any (
+                       "DeleteMessage", "MoveToFolder", "MarkAsRead"),
+                       "[DELETE/MOVE] ", "")
+    | extend
+        EventTime      = Timestamp,
+        EventType      = strcat(Flag_Blank, Flag_Fwd, Flag_Delete, ActionType),
+        Actor          = RawUPN,
+        SourceIP       = tostring(RawEventData.ClientIP),
+        IsFranklin     = iff(tostring(RawEventData.ClientIP) == _Franklin, "Yes", "No"),
+        Detail         = strcat("Action=", ActionType, " | Params=", RuleParams),
+        KillChainPhase = "Installation - Persistence",
+        UniqueToken    = "",
+        CorrId         = "",
+        UA             = ""
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// STAGE 5 - AuditLogs (all kept - already low volume)
+// Flags: MFA device changes, role changes, admin-initiated actions
+// ATT&CK: T1098.001, T1098.003
+// =============================================================
+let T_Audit =
+    AuditLogs
+    | where TimeGenerated > ago(_Lookback)
+    | where TargetResources has _UPN
+    | extend
+        TargetUPN_Audit = tostring(TargetResources[0].userPrincipalName),
+        InitiatedByUPN  = tostring(InitiatedBy.user.userPrincipalName),
+        InitiatedByIP   = tostring(InitiatedBy.user.ipAddress),
+        ModifiedProps   = tostring(TargetResources[0].modifiedProperties)
+    | extend
+        Flag_MFA       = iff(OperationName in (
+                           "Update user",
+                           "User registered security info",
+                           "Admin registered security info")
+                           and ModifiedProps has_any ("authenticatorApp","fido","phoneNumber","softwareOath"),
+                           "[MFA_CHANGE] ", ""),
+        Flag_Role      = iff(OperationName has_any ("Add member to role","Remove member from role"),
+                           "[ROLE_CHANGE] ", ""),
+        Flag_AdminInit = iff(InitiatedByUPN !~ _UPN and isnotempty(InitiatedByUPN),
+                           "[ADMIN_INITIATED] ", "[SELF] ")
+    | extend
+        EventTime      = TimeGenerated,
+        EventType      = strcat(Flag_MFA, Flag_Role, Flag_AdminInit, OperationName),
+        Actor          = InitiatedByUPN,
+        SourceIP       = InitiatedByIP,
+        IsFranklin     = iff(InitiatedByIP == _Franklin, "Yes", "No"),
+        Detail         = strcat(
+                           "Target=",    TargetUPN_Audit,
+                           " | Result=", Result,
+                           " | Mods=",   ModifiedProps
+                         ),
+        KillChainPhase = case(
+                           Flag_MFA != "",  "Installation - Persistence",
+                           Flag_Role != "", "Actions on Objectives",
+                           "Audit"
+                         ),
+        UniqueToken    = "",
+        CorrId         = CorrelationId,
+        UA             = ""
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// STAGE 6 - ThreatIntel hits on sign-in IPs
+// Uses ThreatIntelIndicators (STIX) — NOT deprecated
+// ThreatIntelligenceIndicator (stopped ingesting Jul 31 2025)
+// Data.description path confirmed against tenant schema
+// ATT&CK: TI enrichment
+// =============================================================
+let TI =
+    ThreatIntelIndicators
+    | where IsDeleted == false
+    | where ValidUntil > now()
+    | summarize arg_max(TimeGenerated, *) by Id
+    | where ObservableKey in (
+        "ipv4-addr:value",
+        "ipv6-addr:value",
+        "network-traffic:src_ref.value",
+        "network-traffic:dst_ref.value"
+    )
+    | extend TI_IP          = ObservableValue
+    | extend TI_ThreatType  = tostring(Data.indicator_types[0])
+    | extend TI_Description = tostring(Data.description)
+    | summarize
+        TI_ThreatType   = make_set(TI_ThreatType),
+        TI_Confidence   = max(Confidence),
+        TI_Description  = take_any(TI_Description),
+        TI_Sources      = make_set(SourceSystem)
+      by TI_IP;
+let T_TIHits =
+    SigninLogs
+    | where TimeGenerated > ago(_Lookback)
+    | where UserPrincipalName =~ _UPN
+    | where isnotempty(IPAddress)
+    | join kind=inner TI on $left.IPAddress == $right.TI_IP
+    | extend
+        EventTime      = TimeGenerated,
+        EventType      = "[TI_HIT] Sign-in from known malicious IP",
+        Actor          = UserPrincipalName,
+        SourceIP       = IPAddress,
+        IsFranklin     = iff(IPAddress == _Franklin, "Yes", "No"),
+        Detail         = strcat(
+                           "TI_Confidence=", tostring(TI_Confidence),
+                           " | TI_Type=",    tostring(TI_ThreatType),
+                           " | TI_Desc=",    TI_Description,
+                           " | TI_Src=",     tostring(TI_Sources),
+                           " | Auth=",       AuthenticationProtocol,
+                           " | Result=",     tostring(ResultType)
+                         ),
+        KillChainPhase = "C2 - Known Infrastructure",
+        UniqueToken    = UniqueTokenIdentifier,
+        CorrId         = CorrelationId,
+        UA             = UserAgent
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// STAGE 7 - BehaviorAnalytics / UEBA
+// OMNIA-specific: InvestigationPriority tops out at 4 in this
+// tenant. Community threshold of >=6 returns zero rows here.
+// BehaviorAnalytics stores UserName as prefix only (no @domain)
+// ATT&CK: T1078
+// =============================================================
+let T_UEBA =
+    BehaviorAnalytics
+    | where TimeGenerated > ago(_Lookback)
+    | where UserName =~ tostring(split(_UPN, "@")[0])
+        or UserPrincipalName =~ _UPN
+    | where InvestigationPriority >= 2
+    | extend
+        EventTime      = TimeGenerated,
+        EventType      = strcat("[UEBA] ", ActivityType),
+        Actor          = coalesce(UserPrincipalName, UserName),
+        SourceIP       = SourceIPAddress,
+        IsFranklin     = iff(SourceIPAddress == _Franklin, "Yes", "No"),
+        Detail         = strcat(
+                           "Priority=",        tostring(InvestigationPriority),
+                           " | Action=",       ActionType,
+                           " | Loc=",          SourceIPLocation,
+                           " | Insights=",     tostring(ActivityInsights),
+                           " | UserInsights=", tostring(UsersInsights)
+                         ),
+        KillChainPhase = "Behavioral Anomaly",
+        UniqueToken    = "",
+        CorrId         = "",
+        UA             = ""
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// STAGE 8 - OfficeActivity suspicious sends
+// Signal filter: empty AppAccessContext (no OAuth token = app
+// bypassing Graph API, e.g. Simple MAPI, SMTP AUTH, add-in),
+// or unknown app ID (not Outlook desktop or Outlook Mobile)
+// Key fields: ClientProcessName, ClientVersion, Item.ParentFolder
+// Discovered during Tessa Kemp investigation Jul 2026
+// ATT&CK: T1534
+// =============================================================
+let T_OfficeSend =
+    OfficeActivity
+    | where TimeGenerated > ago(_Lookback)
+    | where UserId =~ _UPN
+    | where Operation == "Send"
+    | extend
+        AppId_str   = tostring(parse_json(tostring(AppAccessContext)).ClientAppId),
+        AppName_str = tostring(parse_json(tostring(AppAccessContext)).ClientAppDisplayName),
+        TokenId     = tostring(parse_json(tostring(AppAccessContext)).UniqueTokenId),
+        ProcessName = tostring(ClientProcessName),
+        Folder      = tostring(parse_json(tostring(Item)).ParentFolder.Path),
+        RecipCount  = tostring(parse_json(tostring(Item)).RecipientsCount)
+    | extend
+        Flag_NoAppId   = iff(isempty(AppId_str),                                "[NO_APP_ID] ",  ""),
+        Flag_UnknownApp = iff(isnotempty(AppId_str)
+                             and AppId_str != "5d661950-3475-41cd-a2c3-d671a3162bc1"
+                             and AppId_str != "27922004-5251-4030-b22d-91ecd9a37ea4",
+                             "[UNKNOWN_APP] ", ""),
+        Flag_SimpleMAPI = iff(ProcessName =~ "Outlook.exe" and isempty(AppId_str),
+                             "[SIMPLE_MAPI] ", "")
+    | where isempty(AppId_str)
+        or (isnotempty(AppId_str)
+            and AppId_str != "5d661950-3475-41cd-a2c3-d671a3162bc1"
+            and AppId_str != "27922004-5251-4030-b22d-91ecd9a37ea4")
+    | extend
+        EventTime      = TimeGenerated,
+        EventType      = strcat(Flag_NoAppId, Flag_UnknownApp, Flag_SimpleMAPI, "OfficeActivity Send"),
+        Actor          = UserId,
+        SourceIP       = ClientIP,
+        IsFranklin     = iff(ClientIP == _Franklin, "Yes", "No"),
+        Detail         = strcat(
+                           "Process=",     ProcessName,
+                           " | Version=",  tostring(ClientVersion),
+                           " | AppId=",    AppId_str,
+                           " | AppName=",  AppName_str,
+                           " | Client=",   ClientInfoString,
+                           " | Folder=",   Folder,
+                           " | RecipCnt=", RecipCount,
+                           " | External=", tostring(ExternalAccess)
+                         ),
+        KillChainPhase = "Actions on Objectives",
+        UniqueToken    = TokenId,
+        CorrId         = "",
+        UA             = ClientInfoString
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// STAGE 9 - OAuth Mail.Send consent grants
+// Fires when any app is granted Mail.Send for this user or
+// by this user. AllPrincipals grants are tenant-wide risk.
+// Self-approval by admin = SoD violation → escalate to Richard.
+// Discovered during Tessa Kemp investigation Jul 2026
+// ATT&CK: T1098, T1098.003
+// =============================================================
+let T_OAuthConsent =
+    CloudAppEvents
+    | where Timestamp > ago(30d)                // hardcoded - match _Lookback
+    | where ActionType has_any ("Consent to application","Add delegated permission grant")
+    | extend
+        RawUPN     = tostring(RawEventData.UserId),
+        Perms      = tostring(RawEventData.ModifiedProperties),
+        AppName    = tostring(RawEventData.Target[4].ID),
+        ConsentAll = tostring(RawEventData.ModifiedProperties)
+    | where RawUPN =~ _UPN
+        or Perms has "Mail.Send"
+    | extend
+        Flag_MailSend  = iff(Perms has "Mail.Send",                          "[MAIL_SEND] ",    ""),
+        Flag_AllPrin   = iff(ConsentAll has "AllPrincipals",                 "[ALL_PRINCIPALS] ",""),
+        Flag_SoD       = iff(RawUPN endswith ".admin@op.omniapartners.com"
+                             and ConsentAll has "AllPrincipals",             "[SOD_VIOLATION] ", ""),
+        Flag_BroadPerm = iff(Perms has_any (
+                             "Mail.ReadWrite","Directory.ReadWrite.All",
+                             "Group.ReadWrite.All","User.ReadWrite.All"),     "[BROAD_PERMS] ",  "")
+    | extend
+        EventTime      = Timestamp,
+        EventType      = strcat(Flag_SoD, Flag_AllPrin, Flag_MailSend, Flag_BroadPerm, ActionType),
+        Actor          = RawUPN,
+        SourceIP       = tostring(RawEventData.ClientIP),
+        IsFranklin     = iff(tostring(RawEventData.ClientIP) == _Franklin, "Yes", "No"),
+        Detail         = strcat(
+                           "App=",    AppName,
+                           " | Perms=", Perms
+                         ),
+        KillChainPhase = "Installation - App Persistence",
+        UniqueToken    = "",
+        CorrId         = "",
+        UA             = ""
+    | project
+        EventTime, EventType, Actor, SourceIP, IsFranklin,
+        Detail, KillChainPhase, UniqueToken, CorrId, UA;
+
+// =============================================================
+// FINAL UNION
+// isfuzzy=true — missing tables skip gracefully without error
+// Filter EventType tags for specific kill chain phases:
+//   | where KillChainPhase contains "C2"
+//   | where EventType contains "[BLANK_CONDITION]"
+//   | where EventType contains "[TI_HIT]"
+//   | where EventType contains "[SOD_VIOLATION]"
+//   | where EventType contains "[NO_APP_ID]"
+// Pivot by UniqueToken to correlate sign-in → token replay
+// Pivot by CorrId to correlate email → click → sign-in
+// =============================================================
+union isfuzzy=true
+    T_Signins,
+    T_Email,
+    T_Clicks,
+    T_InboxRules,
+    T_Audit,
+    T_TIHits,
+    T_UEBA,
+    T_OfficeSend,
+    T_OAuthConsent
+| where isnotempty(EventTime)
+| order by EventTime asc

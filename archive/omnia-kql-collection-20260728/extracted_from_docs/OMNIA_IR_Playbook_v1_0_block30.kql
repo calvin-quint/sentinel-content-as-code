@@ -1,0 +1,8 @@
+// Child processes spawned by malicious file
+DeviceProcessEvents
+| where DeviceName == "<device_name>"
+| where Timestamp > ago(48h)
+| where InitiatingProcessFileName =~ "<filename>"
+| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine,
+          InitiatingProcessFileName, InitiatingProcessCommandLine, SHA256
+| order by Timestamp desc
