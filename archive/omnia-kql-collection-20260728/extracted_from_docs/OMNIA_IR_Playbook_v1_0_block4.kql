@@ -1,9 +1,0 @@
-// ATT&CK: T1550.001
-SigninLogs
-| where TimeGenerated > ago(24h)
-| where IsInteractive == false
-| where UserAgent has_any ("portal-browser", "Electron")
-| where isnotempty(MfaDetail)
-| project TimeGenerated, UserPrincipalName, IPAddress, UserAgent,
-          tostring(MfaDetail), tostring(DeviceDetail)
-| order by TimeGenerated desc

@@ -1,8 +1,0 @@
-// Source: chat "KQL queries for insider risk and AITM detection" (2026-06-26)
-// Conditional Access policy disabled or modified
-AuditLogs
-| where TimeGenerated > ago(24h)
-| where OperationName in ("Update conditional access policy", "Delete conditional access policy",
-    "Disable conditional access policy")
-| project TimeGenerated, OperationName, InitiatedBy, TargetResources
-| order by TimeGenerated desc

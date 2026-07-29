@@ -1,6 +1,0 @@
-DeviceProcessEvents
-| where Timestamp > ago(30d)
-| where DeviceName contains "1272"
-| where FileName in~ ("cmd.exe","systeminfo.exe","ipconfig.exe","nslookup.exe","ping.exe","net.exe","net1.exe","curl.exe","msiexec.exe")
-| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine, InitiatingProcessFileName
-| order by Timestamp asc

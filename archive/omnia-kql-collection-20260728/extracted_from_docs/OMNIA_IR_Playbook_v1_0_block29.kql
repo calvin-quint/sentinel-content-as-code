@@ -1,8 +1,0 @@
-// ATT&CK: T1059 / T1204.002
-DeviceProcessEvents
-| where DeviceName == "<device_name>"
-| where Timestamp > ago(48h)
-| where FileName =~ "<filename>" or SHA256 == "<sha256_hash>"
-| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine,
-          SHA256, InitiatingProcessFileName, InitiatingProcessCommandLine
-| order by Timestamp desc

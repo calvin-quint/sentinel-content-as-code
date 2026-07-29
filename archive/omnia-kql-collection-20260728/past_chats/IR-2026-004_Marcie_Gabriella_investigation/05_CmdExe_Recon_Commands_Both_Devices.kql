@@ -1,9 +1,0 @@
-// Source: chat "Intune script for Quick Assist uninstallation" (2026-07-26)
-// IR-2026-004 - cmd.exe activity on both compromised devices
-DeviceProcessEvents
-| where DeviceName in ("omnia-1272", "omnia-1294")
-| where Timestamp > ago(30d)
-| where FileName =~ "cmd.exe" or InitiatingProcessFileName =~ "cmd.exe"
-| project Timestamp, DeviceName, AccountName, FileName, ProcessCommandLine,
-          InitiatingProcessFileName, InitiatingProcessCommandLine
-| order by Timestamp desc

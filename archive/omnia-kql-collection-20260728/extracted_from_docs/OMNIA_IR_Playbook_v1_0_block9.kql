@@ -1,6 +1,0 @@
-// OfficeActivity — catches rules outside CloudAppEvents lookback window
-OfficeActivity
-| where UserId == "<upn>"
-| where Operation in ("New-InboxRule", "Set-InboxRule", "UpdateInboxRules")
-| project TimeGenerated, UserId, Operation, Parameters, ClientIP
-| order by TimeGenerated desc

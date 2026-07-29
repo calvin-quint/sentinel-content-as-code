@@ -1,7 +1,0 @@
-// ATT&CK: T1098.001 - Additional Cloud Credentials
-AuditLogs
-| where TimeGenerated > ago(24h)
-| where OperationName in ("Update user", "User registered security info")
-| where TargetResources has "authenticatorApp" or TargetResources has "fido"
-| project TimeGenerated, OperationName, InitiatedBy, TargetResources, Result
-| order by TimeGenerated desc
